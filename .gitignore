@@ -1,0 +1,11 @@
+# Local secrets and parameter overrides
+.env
+*.local.bicepparam
+
+# Generated Bicep/ARM output
+infra/*.json
+infra/modules/*.json
+
+# PowerShell and test output
+*.log
+TestResults/

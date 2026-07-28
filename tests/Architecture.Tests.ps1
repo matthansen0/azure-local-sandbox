@@ -1,0 +1,186 @@
+BeforeAll {
+    $repoRoot = Split-Path -Parent $PSScriptRoot
+    $configuration = Import-PowerShellDataFile (Join-Path $repoRoot 'config/lab.psd1')
+    $networkTemplate = Get-Content (Join-Path $repoRoot 'infra/modules/network.bicep') -Raw
+    $dependencies = Import-PowerShellDataFile (Join-Path $repoRoot 'config/dependencies.psd1')
+
+    function Get-IPv4Range {
+        param([Parameter(Mandatory)][string]$Cidr)
+
+        $cidrParts = $Cidr.Split('/')
+        $addressBytes = [Net.IPAddress]::Parse($cidrParts[0]).GetAddressBytes()
+        $prefixLength = [int]$cidrParts[1]
+        $addressValue =
+            ([uint64]$addressBytes[0] * 16777216) +
+            ([uint64]$addressBytes[1] * 65536) +
+            ([uint64]$addressBytes[2] * 256) +
+            [uint64]$addressBytes[3]
+        $addressCount = [uint64][math]::Pow(2, 32 - $prefixLength)
+        $start = $addressValue - ($addressValue % $addressCount)
+
+        return [pscustomobject]@{
+            Cidr  = $Cidr
+            Start = $start
+            End   = $start + $addressCount - 1
+        }
+    }
+
+    function Test-RangeOverlap {
+        param($First, $Second)
+
+        return -not ($First.End -lt $Second.Start -or $Second.End -lt $First.Start)
+    }
+}
+
+Describe 'Lab topology contract' {
+    It 'uses the current schema' {
+        $configuration.SchemaVersion | Should -Be 2
+    }
+
+    It 'defines one management host and two Azure Local nodes' {
+        @($configuration.VMs).Count | Should -Be 3
+        @($configuration.VMs | Where-Object Role -eq 'Management').Count | Should -Be 1
+        @($configuration.VMs | Where-Object Role -eq 'AzureLocalNode').Count | Should -Be 2
+        @($configuration.VMs.Name | Sort-Object) | Should -Be @('AzLHOST1', 'AzLHOST2', 'AzLMGMT')
+    }
+
+    It 'assigns unique VM and adapter names' {
+        @($configuration.VMs.Name | Group-Object | Where-Object Count -gt 1).Count | Should -Be 0
+        foreach ($virtualMachine in @($configuration.VMs)) {
+            @($virtualMachine.NetworkAdapters.Name | Group-Object | Where-Object Count -gt 1).Count |
+                Should -Be 0 -Because "$($virtualMachine.Name) adapter names must be unique"
+        }
+    }
+
+    It 'provides enough memory for the intended E32s host' {
+        $nestedMemory = (@($configuration.VMs) | Measure-Object MemoryStartupBytes -Sum).Sum
+        $nestedMemory | Should -BeLessOrEqual 240GB
+        $nestedMemory | Should -BeGreaterOrEqual 200GB
+    }
+
+    It 'defines all Azure Local node adapters and storage disks' {
+        foreach ($node in @($configuration.VMs | Where-Object Role -eq 'AzureLocalNode')) {
+            @($node.NetworkAdapters.Name | Sort-Object) | Should -Be @('SDN', 'StorageA', 'StorageB')
+            @($node.StorageDisks).Count | Should -Be 6
+            $node.NestedVirtualization | Should -BeTrue
+        }
+    }
+}
+
+Describe 'Network isolation contract' {
+    It 'keeps every nested network disjoint' {
+        $nestedRanges = @(
+            $configuration.Networks.GetEnumerator() |
+                Where-Object { $_.Value.ContainsKey('Prefix') } |
+                ForEach-Object { Get-IPv4Range -Cidr $_.Value.Prefix }
+        )
+
+        for ($firstIndex = 0; $firstIndex -lt $nestedRanges.Count; $firstIndex++) {
+            for ($secondIndex = $firstIndex + 1; $secondIndex -lt $nestedRanges.Count; $secondIndex++) {
+                Test-RangeOverlap -First $nestedRanges[$firstIndex] -Second $nestedRanges[$secondIndex] |
+                    Should -BeFalse -Because "$($nestedRanges[$firstIndex].Cidr) and $($nestedRanges[$secondIndex].Cidr) must not overlap"
+            }
+        }
+    }
+
+    It 'keeps the outer Azure VNet disjoint from every nested network' {
+        $outerPrefixMatch = [regex]::Match(
+            $networkTemplate,
+            "param\s+virtualNetworkAddressPrefix\s+string\s*=\s*'([^']+)'"
+        )
+        $outerPrefixMatch.Success | Should -BeTrue
+        $outerRange = Get-IPv4Range -Cidr $outerPrefixMatch.Groups[1].Value
+
+        foreach ($network in $configuration.Networks.GetEnumerator() | Where-Object { $_.Value.ContainsKey('Prefix') }) {
+            $nestedRange = Get-IPv4Range -Cidr $network.Value.Prefix
+            Test-RangeOverlap -First $outerRange -Second $nestedRange |
+                Should -BeFalse -Because "outer $($outerRange.Cidr) and nested $($nestedRange.Cidr) must not overlap"
+        }
+    }
+
+    It 'uses the documented outer network range' {
+        $networkTemplate | Should -Match "virtualNetworkAddressPrefix string = '172\.31\.0\.0/16'"
+        $networkTemplate | Should -Match "hostSubnetAddressPrefix string = '172\.31\.1\.0/24'"
+        $networkTemplate | Should -Match "bastionSubnetAddressPrefix string = '172\.31\.2\.0/26'"
+    }
+}
+
+Describe 'Credential and artifact contract' {
+    It 'does not put a password in static configuration' {
+        $configurationText = Get-Content (Join-Path $repoRoot 'config/lab.psd1') -Raw
+        $configurationText | Should -Not -Match '(?i)password\s*='
+    }
+
+    It 'does not redistribute parent VHDX images' {
+        @(Get-ChildItem $repoRoot -Recurse -File -Include '*.vhd', '*.vhdx').Count | Should -Be 0
+    }
+
+    It 'loads the administrator password from the environment' {
+        $parameterText = Get-Content (Join-Path $repoRoot 'infra/main.bicepparam') -Raw
+        $parameterText | Should -Match "readEnvironmentVariable\('AZURE_LOCAL_SANDBOX_ADMIN_PASSWORD'\)"
+        $parameterText | Should -Match "readEnvironmentVariable\('AZURE_LOCAL_RESOURCE_PROVIDER_OBJECT_ID'\)"
+        $parameterText | Should -Match "readEnvironmentVariable\('AZURE_LOCAL_SANDBOX_BOOTSTRAP_SHA256'\)"
+        $parameterText | Should -Match "readEnvironmentVariable\('AZURE_LOCAL_SANDBOX_SOURCE_SHA256'\)"
+        $parameterText | Should -Match "readEnvironmentVariable\('AZURE_LOCAL_SANDBOX_BOOTSTRAP_URI'\)"
+        $parameterText | Should -Match "readEnvironmentVariable\('AZURE_LOCAL_SANDBOX_SOURCE_URI'\)"
+        $parameterText | Should -Match "readEnvironmentVariable\('AZURE_LOCAL_SANDBOX_HOST_IMAGE_VERSION'\)"
+    }
+
+    It 'uses the current Azure Local resource-provider application ID' {
+        $deploymentWrapper = Get-Content (Join-Path $repoRoot 'scripts/Deploy.ps1') -Raw
+        $deploymentWrapper | Should -Match '1412d89f-b8a8-4111-b4fd-e82905cbd85d'
+        $deploymentWrapper | Should -Not -Match '00001111-aaaa-2222-bbbb-3333cccc4444'
+    }
+
+    It 'supports verified ISO conversion without redistributing media' {
+        $isoConverter = Get-Content (Join-Path $repoRoot 'scripts/Convert-LabIsoMedia.ps1') -Raw
+        $isoConverter | Should -Match 'Get-FileHash'
+        $isoConverter | Should -Match 'Get-WindowsImage'
+        $isoConverter | Should -Match 'dism\.exe'
+        $isoConverter | Should -Match 'bcdboot\.exe'
+    }
+
+    It 'provides a guided in-VM ISO handoff and desktop launcher' {
+        $guidedSetup = Get-Content (Join-Path $repoRoot 'scripts/Start-SandboxSetup.ps1') -Raw
+        $bootstrap = Get-Content (Join-Path $repoRoot 'scripts/Bootstrap.ps1') -Raw
+
+        $guidedSetup | Should -Match 'Convert-LabIsoMedia\.ps1'
+        $guidedSetup | Should -Match 'Invoke-SandboxDeployment\.ps1'
+        $guidedSetup | Should -Match 'Get-Credential'
+        $bootstrap | Should -Match 'Azure Local Sandbox Setup\.lnk'
+        $bootstrap | Should -Match 'Start-SandboxSetup\.ps1'
+    }
+
+    It 'pins reviewed external dependencies' {
+        $dependencies.SchemaVersion | Should -Be 1
+        $dependencies.AzureLocalQuickstart.Commit | Should -Match '^[0-9a-f]{40}$'
+        $dependencies.AzureLocalQuickstart.Sha256 | Should -Match '^[A-F0-9]{64}$'
+        $dependencies.Bicep.Version | Should -Match '^\d+\.\d+\.\d+$'
+        foreach ($module in $dependencies.PowerShellModules.Values) {
+            $module.Name | Should -Not -BeNullOrEmpty
+            $module.Version | Should -Not -BeNullOrEmpty
+        }
+    }
+
+    It 'stages immutable source through private deployment storage' {
+        $deploymentWrapper = Get-Content (Join-Path $repoRoot 'scripts/Deploy.ps1') -Raw
+        $mainTemplate = Get-Content (Join-Path $repoRoot 'infra/main.bicep') -Raw
+        $hostTemplate = Get-Content (Join-Path $repoRoot 'infra/modules/host.bicep') -Raw
+        $deploymentWrapper | Should -Match 'git\.Source.*archive'
+        $deploymentWrapper | Should -Match "--allow-blob-public-access', 'false'"
+        $deploymentWrapper | Should -Match "'storage', 'blob', 'generate-sas'"
+        $deploymentWrapper | Should -Match "'storage', 'account', 'delete'"
+        $deploymentWrapper | Should -Not -Match 'bootstrapScriptUri=\$'
+        $deploymentWrapper | Should -Not -Match 'sourceArchiveUri=\$'
+        $mainTemplate | Should -Match "@secure\(\)\s*\r?\nparam bootstrapScriptUri string"
+        $mainTemplate | Should -Match "@secure\(\)\s*\r?\nparam sourceArchiveUri string"
+        $hostTemplate | Should -Match "@secure\(\)\s*\r?\nparam bootstrapScriptUri string"
+        $hostTemplate | Should -Match "@secure\(\)\s*\r?\nparam sourceArchiveUri string"
+    }
+
+    It 'does not deploy a mutable latest host image' {
+        $hostTemplate = Get-Content (Join-Path $repoRoot 'infra/modules/host.bicep') -Raw
+        $hostTemplate | Should -Not -Match "version:\s*'latest'"
+        $hostTemplate | Should -Match 'version:\s*imageVersion'
+    }
+}

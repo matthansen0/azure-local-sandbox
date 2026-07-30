@@ -90,16 +90,13 @@ Runtime dependencies include:
 
 ## Source Artifact Chain
 
-`scripts/Deploy.ps1` requires a clean Git commit. In `Deploy` mode it:
+`scripts/Deploy.ps1` requires a clean Git commit that has been pushed. In `Deploy` mode it:
 
-1. Exports `Bootstrap.ps1` and a ZIP from the exact commit.
-2. Computes both SHA-256 values.
-3. Creates a temporary private Azure Storage account.
-4. Uploads both artifacts with public access disabled.
-5. Generates 24-hour read-only HTTPS SAS URLs.
-6. Passes the URLs through secure Bicep parameters.
-7. Verifies hashes again on the VM.
-8. Deletes the staging storage account after deployment.
+1. Resolves the exact commit and confirms it exists on a remote branch.
+2. Builds immutable `raw.githubusercontent.com` and `codeload.github.com` URLs pinned to that commit SHA.
+3. Downloads both artifacts and computes their SHA-256 values.
+4. Passes the URLs through secure Bicep parameters.
+5. Verifies both hashes again on the VM before executing anything.
 
 Custom immutable HTTPS artifact URLs can be supplied instead.
 

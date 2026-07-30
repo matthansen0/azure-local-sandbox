@@ -25,9 +25,9 @@ The deployment registers the required Azure resource providers.
 - Azure CLI.
 - Git.
 - An authenticated Azure CLI session targeting the intended subscription.
-- A clean Git commit containing the exact source to deploy.
+- A clean Git commit, pushed to GitHub, containing the exact source to deploy.
 
-The deployment script packages the commit, places it temporarily in private Azure Storage, and supplies read-only SAS URLs to the VM extension. The staging account disables shared key access; the script grants the signed-in principal `Storage Blob Data Contributor` on the account and uses Microsoft Entra ID for uploads and a user delegation SAS. The staging account is removed after deployment.
+The deployment script pins `Bootstrap.ps1` and the source archive to that commit SHA on GitHub, hashes both, and supplies the URLs and SHA-256 values to the VM extension through secure Bicep parameters. The VM re-verifies both hashes before executing anything. Pass `-BootstrapScriptUri` and `-SourceArchiveUri` to use your own immutable HTTPS artifacts instead.
 
 ### Media
 

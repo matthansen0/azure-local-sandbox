@@ -162,14 +162,15 @@ Describe 'Credential and artifact contract' {
         }
     }
 
-    It 'stages immutable source through private deployment storage' {
+    It 'stages immutable source through published GitHub artifacts' {
         $deploymentWrapper = Get-Content (Join-Path $repoRoot 'scripts/Deploy.ps1') -Raw
         $mainTemplate = Get-Content (Join-Path $repoRoot 'infra/main.bicep') -Raw
         $hostTemplate = Get-Content (Join-Path $repoRoot 'infra/modules/host.bicep') -Raw
-        $deploymentWrapper | Should -Match 'git\.Source.*archive'
-        $deploymentWrapper | Should -Match "--allow-blob-public-access', 'false'"
-        $deploymentWrapper | Should -Match "'storage', 'blob', 'generate-sas'"
-        $deploymentWrapper | Should -Match "'storage', 'account', 'delete'"
+        $deploymentWrapper | Should -Match 'https://raw\.githubusercontent\.com/\$owner/\$repository/\$Revision/scripts/Bootstrap\.ps1'
+        $deploymentWrapper | Should -Match 'https://codeload\.github\.com/\$owner/\$repository/zip/\$Revision'
+        $deploymentWrapper | Should -Match 'branch --remotes --contains'
+        $deploymentWrapper | Should -Not -Match "'storage', 'account', 'create'"
+        $deploymentWrapper | Should -Not -Match "'storage', 'blob', 'generate-sas'"
         $deploymentWrapper | Should -Not -Match 'bootstrapScriptUri=\$'
         $deploymentWrapper | Should -Not -Match 'sourceArchiveUri=\$'
         $mainTemplate | Should -Match "@secure\(\)\s*\r?\nparam bootstrapScriptUri string"

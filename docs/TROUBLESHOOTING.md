@@ -125,13 +125,13 @@ Review the deterministic `azure-local-validate` deployment in the sandbox resour
 
 `Deploy-AzureLocal.ps1 -Mode Deploy` requires a successful validation and the exact same pinned Quickstart template hash.
 
-### Temporary artifact storage remains
+### Commit has not been pushed
 
-`Deploy.ps1` normally deletes the private staging storage account in `finally`. If the process was forcibly terminated, inspect the sandbox resource group for an account beginning with `azlsb` and remove it after confirming the VM extension no longer needs the artifacts.
+`Deploy.ps1` pins the artifact URLs to the current commit SHA and the host downloads them from GitHub, so the commit must exist on a remote branch. Push the branch, or pass `-BootstrapScriptUri` and `-SourceArchiveUri` to use your own immutable HTTPS artifacts.
 
-### `KeyBasedAuthenticationNotPermitted` while staging artifacts
+### Source archive SHA-256 mismatch on the VM
 
-The staging account uses Microsoft Entra ID rather than account keys, so this error means an older script version was used, or the signed-in principal lacks data-plane access. Confirm the principal holds `Storage Blob Data Contributor` on the `azlsb*` account; `Deploy.ps1` creates that assignment and retries while it propagates. Creating role assignments in the sandbox subscription is required.
+`Deploy.ps1` hashes the GitHub archive at deployment time and the VM re-verifies it. A mismatch means GitHub regenerated the archive for that commit between the two downloads. Rerun `Deploy.ps1` to recompute the hash.
 
 ## Cleanup
 

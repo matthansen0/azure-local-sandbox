@@ -66,65 +66,6 @@ function Invoke-AzureCli {
     return $output
 }
 
-function Invoke-AzureCliWithRetry {
-    param(
-        [Parameter(Mandatory)]
-        [string[]]$Arguments,
-
-        [Parameter(Mandatory)]
-        [string]$Activity,
-
-        [int]$MaxAttempts = 20,
-
-        [int]$DelaySeconds = 15
-    )
-
-    for ($attempt = 1; ; $attempt++) {
-        try {
-            return Invoke-AzureCli -Arguments $Arguments
-        }
-        catch {
-            if ($attempt -ge $MaxAttempts) {
-                throw
-            }
-            Write-Step "$Activity failed on attempt $attempt of $MaxAttempts; retrying in $DelaySeconds seconds."
-            Start-Sleep -Seconds $DelaySeconds
-        }
-    }
-}
-
-function Get-DeploymentPrincipal {
-    param(
-        [Parameter(Mandatory)]$Account
-    )
-
-    switch ($Account.user.type) {
-        'user' {
-            $objectId = Invoke-AzureCli `
-                -Arguments @('ad', 'signed-in-user', 'show', '--query', 'id', '--only-show-errors', '--output', 'tsv')
-            $principalType = 'User'
-        }
-        'servicePrincipal' {
-            $objectId = Invoke-AzureCli `
-                -Arguments @('ad', 'sp', 'show', '--id', $Account.user.name, '--query', 'id', '--only-show-errors', '--output', 'tsv')
-            $principalType = 'ServicePrincipal'
-        }
-        default {
-            throw "Unsupported Azure CLI principal type '$($Account.user.type)'. Sign in as a user or service principal."
-        }
-    }
-
-    $objectId = ($objectId -join '').Trim()
-    if (-not $objectId) {
-        throw 'Unable to resolve the signed-in principal used to stage deployment artifacts.'
-    }
-
-    return [pscustomobject]@{
-        ObjectId      = $objectId
-        PrincipalType = $principalType
-    }
-}
-
 function Get-RemoteArtifactHash {
     param(
         [Parameter(Mandatory)][uri]$Uri,
@@ -145,7 +86,7 @@ function Get-RemoteArtifactHash {
     }
 }
 
-function Get-SourceSnapshot {
+function Resolve-PublishedSource {
     param(
         [string]$Revision,
         [Parameter(Mandatory)][string]$RepositoryRoot
@@ -153,7 +94,7 @@ function Get-SourceSnapshot {
 
     $git = Get-Command git -ErrorAction SilentlyContinue
     if (-not $git) {
-        throw 'Git is required to package immutable deployment artifacts. Supply both explicit artifact URIs to bypass local packaging.'
+        throw 'Git is required to resolve the published deployment source. Supply both explicit artifact URIs to bypass Git.'
     }
 
     $worktreeStatus = & $git.Source -C $RepositoryRoot status --porcelain --untracked-files=normal
@@ -171,181 +112,30 @@ function Get-SourceSnapshot {
         throw 'Unable to resolve an immutable source commit.'
     }
 
-    $snapshotRoot = Join-Path ([IO.Path]::GetTempPath()) "azure-local-sandbox-$([guid]::NewGuid())"
-    New-Item -Path $snapshotRoot -ItemType Directory | Out-Null
-    $bootstrapPath = Join-Path $snapshotRoot 'Bootstrap.ps1'
-    $archivePath = Join-Path $snapshotRoot 'source.zip'
+    $Revision = $Revision.ToLowerInvariant()
 
-    $bootstrapContent = & $git.Source -C $RepositoryRoot show "${Revision}:scripts/Bootstrap.ps1"
+    # The host VM pulls the source straight from GitHub, so the commit has to be published.
+    $remoteBranches = & $git.Source -C $RepositoryRoot branch --remotes --contains $Revision
+    if ($LASTEXITCODE -ne 0 -or -not $remoteBranches) {
+        throw "Commit '$Revision' has not been pushed to a remote branch. Push it before deploying so the host can download the source."
+    }
+
+    $remoteUrl = (& $git.Source -C $RepositoryRoot remote get-url origin)
     if ($LASTEXITCODE -ne 0) {
-        Remove-Item -LiteralPath $snapshotRoot -Recurse -Force -ErrorAction SilentlyContinue
-        throw "Bootstrap.ps1 was not found in commit '$Revision'."
+        throw 'Unable to read the origin remote. Supply both explicit artifact URIs instead.'
     }
-    [IO.File]::WriteAllLines($bootstrapPath, [string[]]$bootstrapContent, [Text.UTF8Encoding]::new($false))
-
-    & $git.Source -C $RepositoryRoot archive --format=zip --output=$archivePath $Revision
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $archivePath)) {
-        Remove-Item -LiteralPath $snapshotRoot -Recurse -Force -ErrorAction SilentlyContinue
-        throw "Unable to create a source archive for commit '$Revision'."
+    $remoteUrl = ($remoteUrl -join '').Trim()
+    if ($remoteUrl -notmatch '^(?:https://github\.com/|git@github\.com:)(?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?$') {
+        throw "Origin '$remoteUrl' is not a GitHub repository. Supply both explicit artifact URIs instead."
     }
+    $owner = $Matches['owner']
+    $repository = $Matches['repo']
 
     return [pscustomobject]@{
-        Root          = $snapshotRoot
-        BootstrapPath = $bootstrapPath
-        ArchivePath   = $archivePath
-        BootstrapHash = (Get-FileHash -LiteralPath $bootstrapPath -Algorithm SHA256).Hash
-        ArchiveHash   = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
-        Revision      = $Revision.ToLowerInvariant()
-    }
-}
-
-function Publish-PrivateArtifact {
-    param(
-        [Parameter(Mandatory)]$Snapshot,
-        [Parameter(Mandatory)][string]$SubscriptionId,
-        [Parameter(Mandatory)][string]$ResourceGroup,
-        [Parameter(Mandatory)][string]$AzureLocation,
-        [Parameter(Mandatory)]$Principal
-    )
-
-    Write-Step "Ensuring resource group $ResourceGroup in $AzureLocation..."
-    Invoke-AzureCli `
-        -Arguments @(
-            'group', 'create',
-            '--name', $ResourceGroup,
-            '--location', $AzureLocation,
-            '--only-show-errors',
-            '--output', 'none'
-        ) | Out-Null
-
-    $nameSeed = "$SubscriptionId/$ResourceGroup/$($Snapshot.Revision)"
-    $seedBytes = [Text.Encoding]::UTF8.GetBytes($nameSeed)
-    $sha256 = [Security.Cryptography.SHA256]::Create()
-    try {
-        $suffix = (($sha256.ComputeHash($seedBytes)[0..8] | ForEach-Object { $_.ToString('x2') }) -join '')
-    }
-    finally {
-        $sha256.Dispose()
-    }
-    $storageAccountName = "azlsb${suffix}"
-
-    Write-Step "Creating artifact storage account $storageAccountName (this can take a minute)..."
-    $storageAccountId = Invoke-AzureCli `
-        -Arguments @(
-            'storage', 'account', 'create',
-            '--name', $storageAccountName,
-            '--resource-group', $ResourceGroup,
-            '--location', $AzureLocation,
-            '--sku', 'Standard_LRS',
-            '--kind', 'StorageV2',
-            '--https-only', 'true',
-            '--min-tls-version', 'TLS1_2',
-            '--allow-blob-public-access', 'false',
-            '--allow-shared-key-access', 'false',
-            # New storage accounts default to disabled public network access, which blocks
-            # both the staging client and the VM extension download over the SAS URLs.
-            '--public-network-access', 'Enabled',
-            '--default-action', 'Allow',
-            '--bypass', 'AzureServices',
-            '--query', 'id',
-            '--only-show-errors',
-            '--output', 'tsv'
-        )
-    $storageAccountId = ($storageAccountId -join '').Trim()
-    if (-not $storageAccountId) {
-        throw 'Unable to resolve the private artifact storage account resource ID.'
-    }
-
-    # Shared key access stays disabled, so the staging principal needs data-plane RBAC.
-    Write-Step "Granting Storage Blob Data Contributor to $($Principal.PrincipalType) $($Principal.ObjectId)..."
-    try {
-        Invoke-AzureCli `
-            -Arguments @(
-                'role', 'assignment', 'create',
-                '--assignee-object-id', $Principal.ObjectId,
-                '--assignee-principal-type', $Principal.PrincipalType,
-                '--role', 'Storage Blob Data Contributor',
-                '--scope', $storageAccountId,
-                '--only-show-errors',
-                '--output', 'none'
-            ) | Out-Null
-    }
-    catch {
-        if ($_.Exception.Message -notmatch 'RoleAssignmentExists') {
-            throw
-        }
-    }
-
-    $containerName = 'deployment-artifacts'
-    Write-Step "Creating container $containerName (waiting for role assignment propagation if needed)..."
-    Invoke-AzureCliWithRetry `
-        -Activity 'Container creation' `
-        -Arguments @(
-            'storage', 'container', 'create',
-            '--name', $containerName,
-            '--account-name', $storageAccountName,
-            '--auth-mode', 'login',
-            '--public-access', 'off',
-            '--only-show-errors',
-            '--output', 'none'
-        ) | Out-Null
-
-    foreach ($artifact in @(
-        @{ Name = 'Bootstrap.ps1'; Path = $Snapshot.BootstrapPath }
-        @{ Name = 'source.zip'; Path = $Snapshot.ArchivePath }
-    )) {
-        Write-Step "Uploading $($artifact.Name)..."
-        Invoke-AzureCli `
-            -Arguments @(
-                'storage', 'blob', 'upload',
-                '--container-name', $containerName,
-                '--name', $artifact.Name,
-                '--file', $artifact.Path,
-                '--account-name', $storageAccountName,
-                '--auth-mode', 'login',
-                '--overwrite', 'true',
-                '--only-show-errors',
-                '--output', 'none'
-            ) | Out-Null
-    }
-
-    Write-Step 'Generating read-only user delegation SAS URLs...'
-    $expiry = (Get-Date).ToUniversalTime().AddHours(24).ToString('yyyy-MM-ddTHH:mmZ')
-    $bootstrapSas = Invoke-AzureCli `
-        -Arguments @(
-            'storage', 'blob', 'generate-sas',
-            '--container-name', $containerName,
-            '--name', 'Bootstrap.ps1',
-            '--account-name', $storageAccountName,
-            '--auth-mode', 'login',
-            '--as-user',
-            '--permissions', 'r',
-            '--expiry', $expiry,
-            '--https-only',
-            '--full-uri',
-            '--only-show-errors',
-            '--output', 'tsv'
-        )
-    $archiveSas = Invoke-AzureCli `
-        -Arguments @(
-            'storage', 'blob', 'generate-sas',
-            '--container-name', $containerName,
-            '--name', 'source.zip',
-            '--account-name', $storageAccountName,
-            '--auth-mode', 'login',
-            '--as-user',
-            '--permissions', 'r',
-            '--expiry', $expiry,
-            '--https-only',
-            '--full-uri',
-            '--only-show-errors',
-            '--output', 'tsv'
-        )
-
-    return [pscustomobject]@{
-        StorageAccountName = $storageAccountName
-        BootstrapUri       = [uri](($bootstrapSas -join '').Trim())
-        ArchiveUri         = [uri](($archiveSas -join '').Trim())
+        Revision     = $Revision
+        Repository   = "$owner/$repository"
+        BootstrapUri = [uri]"https://raw.githubusercontent.com/$owner/$repository/$Revision/scripts/Bootstrap.ps1"
+        ArchiveUri   = [uri]"https://codeload.github.com/$owner/$repository/zip/$Revision"
     }
 }
 
@@ -375,16 +165,16 @@ if (($bicepVersion -join ' ') -notmatch "\b$([regex]::Escape($dependencies.Bicep
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$sourceSnapshot = $null
-$privateArtifactStage = $null
 $usesExplicitArtifactUris = $BootstrapScriptUri -or $SourceArchiveUri
 if (($BootstrapScriptUri -and -not $SourceArchiveUri) -or ($SourceArchiveUri -and -not $BootstrapScriptUri)) {
     throw 'Supply both BootstrapScriptUri and SourceArchiveUri, or neither.'
 }
 if (-not $usesExplicitArtifactUris) {
-    Write-Step 'Packaging the committed source snapshot...'
-    $sourceSnapshot = Get-SourceSnapshot -Revision $SourceRevision -RepositoryRoot $repoRoot
-    Write-Step "Source revision: $($sourceSnapshot.Revision)"
+    Write-Step 'Resolving the published source commit on GitHub...'
+    $publishedSource = Resolve-PublishedSource -Revision $SourceRevision -RepositoryRoot $repoRoot
+    $BootstrapScriptUri = $publishedSource.BootstrapUri
+    $SourceArchiveUri = $publishedSource.ArchiveUri
+    Write-Step "Source: $($publishedSource.Repository)@$($publishedSource.Revision)"
 }
 
 if (-not $env:AZURE_LOCAL_SANDBOX_ADMIN_PASSWORD) {
@@ -465,19 +255,16 @@ if (-not $HciResourceProviderObjectId) {
     throw "The Azure Local resource provider service principal was not found. Register Microsoft.AzureStackHCI first or pass -HciResourceProviderObjectId. Deploy mode registers providers automatically."
 }
 $env:AZURE_LOCAL_RESOURCE_PROVIDER_OBJECT_ID = $HciResourceProviderObjectId
-if ($sourceSnapshot) {
-    $env:AZURE_LOCAL_SANDBOX_BOOTSTRAP_SHA256 = $sourceSnapshot.BootstrapHash
-    $env:AZURE_LOCAL_SANDBOX_SOURCE_SHA256 = $sourceSnapshot.ArchiveHash
-}
-else {
-    Write-Step 'Hashing the supplied remote artifacts...'
-    $env:AZURE_LOCAL_SANDBOX_BOOTSTRAP_SHA256 = Get-RemoteArtifactHash `
-        -Uri $BootstrapScriptUri `
-        -Name 'BootstrapScriptUri'
-    $env:AZURE_LOCAL_SANDBOX_SOURCE_SHA256 = Get-RemoteArtifactHash `
-        -Uri $SourceArchiveUri `
-        -Name 'SourceArchiveUri'
-}
+
+Write-Step 'Hashing the published deployment artifacts...'
+$env:AZURE_LOCAL_SANDBOX_BOOTSTRAP_SHA256 = Get-RemoteArtifactHash `
+    -Uri $BootstrapScriptUri `
+    -Name 'BootstrapScriptUri'
+$env:AZURE_LOCAL_SANDBOX_SOURCE_SHA256 = Get-RemoteArtifactHash `
+    -Uri $SourceArchiveUri `
+    -Name 'SourceArchiveUri'
+$env:AZURE_LOCAL_SANDBOX_BOOTSTRAP_URI = $BootstrapScriptUri.AbsoluteUri
+$env:AZURE_LOCAL_SANDBOX_SOURCE_URI = $SourceArchiveUri.AbsoluteUri
 
 Write-Step "Checking $VmSize availability in $Location..."
 $availableSkus = @(
@@ -524,80 +311,40 @@ if (-not $HostImageVersion -or $HostImageVersion -eq 'latest') {
 $env:AZURE_LOCAL_SANDBOX_HOST_IMAGE_VERSION = $HostImageVersion
 Write-Step "Host image version: $HostImageVersion"
 
-try {
-    if (-not $usesExplicitArtifactUris) {
-        if ($Mode -eq 'Deploy') {
-            Write-Step 'Staging private deployment artifacts...'
-            $privateArtifactStage = Publish-PrivateArtifact `
-                -Snapshot $sourceSnapshot `
-                -SubscriptionId $account.id `
-                -ResourceGroup $ResourceGroupName `
-                -AzureLocation $Location `
-                -Principal (Get-DeploymentPrincipal -Account $account)
-            $BootstrapScriptUri = $privateArtifactStage.BootstrapUri
-            $SourceArchiveUri = $privateArtifactStage.ArchiveUri
-            Write-Step "Staged private deployment artifacts in $($privateArtifactStage.StorageAccountName)."
-        }
-        else {
-            $BootstrapScriptUri = [uri]'https://validation.invalid/Bootstrap.ps1'
-            $SourceArchiveUri = [uri]'https://validation.invalid/source.zip'
-        }
+$commonArguments = @(
+    '--name', $DeploymentName,
+    '--location', $Location,
+    '--template-file', $templateFile,
+    '--parameters', $resolvedParameterFile,
+    "location=$Location",
+    "azureLocalLocation=$AzureLocalLocation",
+    "resourceGroupName=$ResourceGroupName",
+    "vmSize=$VmSize",
+    "hostImageVersion=$HostImageVersion",
+    '--only-show-errors'
+)
+
+Write-Step 'Validating subscription deployment...'
+Invoke-AzureCli `
+    -Arguments (@('deployment', 'sub', 'validate') + $commonArguments + @('--output', 'none')) |
+    Out-Null
+
+switch ($Mode) {
+    'Validate' {
+        Write-Step 'Deployment validation succeeded.'
     }
-
-    $env:AZURE_LOCAL_SANDBOX_BOOTSTRAP_URI = $BootstrapScriptUri.AbsoluteUri
-    $env:AZURE_LOCAL_SANDBOX_SOURCE_URI = $SourceArchiveUri.AbsoluteUri
-
-    $commonArguments = @(
-        '--name', $DeploymentName,
-        '--location', $Location,
-        '--template-file', $templateFile,
-        '--parameters', $resolvedParameterFile,
-        "location=$Location",
-        "azureLocalLocation=$AzureLocalLocation",
-        "resourceGroupName=$ResourceGroupName",
-        "vmSize=$VmSize",
-        "hostImageVersion=$HostImageVersion",
-        '--only-show-errors'
-    )
-
-    Write-Step 'Validating subscription deployment...'
-    Invoke-AzureCli `
-        -Arguments (@('deployment', 'sub', 'validate') + $commonArguments + @('--output', 'none')) |
-        Out-Null
-
-    switch ($Mode) {
-        'Validate' {
-            Write-Step 'Deployment validation succeeded.'
-        }
-        'WhatIf' {
-            Write-Step 'Running what-if analysis...'
-            Invoke-AzureCli `
-                -Arguments (@('deployment', 'sub', 'what-if') + $commonArguments + @('--output', 'jsonc'))
-        }
-        'Deploy' {
-            Write-Step 'Creating Azure Local sandbox host. The template takes roughly 20-30 minutes; track progress in the portal deployment blade.'
-            $deployment = Invoke-AzureCli `
-                -Arguments (@('deployment', 'sub', 'create') + $commonArguments + @('--output', 'json')) `
-                -ParseJson
-
-            Write-Step 'Deployment completed.'
-            $deployment.properties.outputs | ConvertTo-Json -Depth 10
-        }
-    }
-}
-finally {
-    if ($sourceSnapshot) {
-        Remove-Item -LiteralPath $sourceSnapshot.Root -Recurse -Force -ErrorAction SilentlyContinue
-    }
-    if ($privateArtifactStage) {
-        Write-Step "Removing temporary artifact storage account $($privateArtifactStage.StorageAccountName)..."
+    'WhatIf' {
+        Write-Step 'Running what-if analysis...'
         Invoke-AzureCli `
-            -Arguments @(
-                'storage', 'account', 'delete',
-                '--name', $privateArtifactStage.StorageAccountName,
-                '--resource-group', $ResourceGroupName,
-                '--yes',
-                '--only-show-errors'
-            ) | Out-Null
+            -Arguments (@('deployment', 'sub', 'what-if') + $commonArguments + @('--output', 'jsonc'))
+    }
+    'Deploy' {
+        Write-Step 'Creating Azure Local sandbox host. The template takes roughly 20-30 minutes; track progress in the portal deployment blade.'
+        $deployment = Invoke-AzureCli `
+            -Arguments (@('deployment', 'sub', 'create') + $commonArguments + @('--output', 'json')) `
+            -ParseJson
+
+        Write-Step 'Deployment completed.'
+        $deployment.properties.outputs | ConvertTo-Json -Depth 10
     }
 }

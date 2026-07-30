@@ -73,14 +73,14 @@ function Register-SubscriptionFeature {
         [timespan]$Timeout = [timespan]::FromMinutes(15)
     )
 
-    $state = (Invoke-AzureCli -Arguments @(
-            'feature', 'show',
-            '--namespace', $Namespace,
-            '--name', $Name,
-            '--query', 'properties.state',
-            '--only-show-errors',
-            '--output', 'tsv'
-        ) -join '').Trim()
+    $state = ((Invoke-AzureCli -Arguments @(
+                'feature', 'show',
+                '--namespace', $Namespace,
+                '--name', $Name,
+                '--query', 'properties.state',
+                '--only-show-errors',
+                '--output', 'tsv'
+            )) -join '').Trim()
 
     if ($state -eq 'Registered') {
         Write-Step "$Namespace/$Name is registered."
@@ -106,14 +106,14 @@ function Register-SubscriptionFeature {
     $deadline = (Get-Date).Add($Timeout)
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 30
-        $state = (Invoke-AzureCli -Arguments @(
-                'feature', 'show',
-                '--namespace', $Namespace,
-                '--name', $Name,
-                '--query', 'properties.state',
-                '--only-show-errors',
-                '--output', 'tsv'
-            ) -join '').Trim()
+        $state = ((Invoke-AzureCli -Arguments @(
+                    'feature', 'show',
+                    '--namespace', $Namespace,
+                    '--name', $Name,
+                    '--query', 'properties.state',
+                    '--only-show-errors',
+                    '--output', 'tsv'
+                )) -join '').Trim()
 
         if ($state -eq 'Registered') {
             Write-Step "$Namespace/$Name is registered."

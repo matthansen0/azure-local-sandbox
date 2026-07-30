@@ -411,17 +411,18 @@ else {
     Write-Step "Azure Bastion SKU: $script:BastionSkuInUse (requested)."
 }
 
+# --parameters takes a variable-length list, so it stays last and every key=value override follows it.
 $commonArguments = @(
     '--name', $DeploymentName,
     '--location', $Location,
     '--template-file', $templateFile,
+    '--only-show-errors',
     '--parameters', $resolvedParameterFile,
     "location=$Location",
     "azureLocalLocation=$AzureLocalLocation",
     "resourceGroupName=$ResourceGroupName",
     "vmSize=$VmSize",
-    "hostImageVersion=$HostImageVersion",
-    '--only-show-errors'
+    "hostImageVersion=$HostImageVersion"
 )
 
 function Invoke-SandboxTemplate {
@@ -453,7 +454,10 @@ function Invoke-SandboxTemplate {
             return $result
         }
         catch {
-            if ($attempt -eq $candidateSkus.Count - 1 -or $_.Exception.Message -notmatch '(?i)bastion|developer') {
+            $isCliUsageError = $_.Exception.Message -match '(?i)unrecognized arguments|invalid choice|expected one argument'
+            if ($attempt -eq $candidateSkus.Count - 1 -or
+                $isCliUsageError -or
+                $_.Exception.Message -notmatch '(?i)bastion|developer') {
                 throw
             }
 

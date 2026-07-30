@@ -195,3 +195,53 @@ Describe 'Credential and artifact contract' {
         $hostTemplate | Should -Match 'version:\s*imageVersion'
     }
 }
+
+Describe 'Azure CLI invocation contract' {
+    BeforeAll {
+        $deployAst = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $repoRoot 'scripts/Deploy.ps1'), [ref]$null, [ref]$null)
+
+        $commonArgumentsAssignment = $deployAst.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                $node.Left.Extent.Text -eq '$commonArguments'
+            }, $true)
+
+        $commonArguments = @(
+            $commonArgumentsAssignment.Right.Find({
+                    param($node)
+                    $node -is [System.Management.Automation.Language.ArrayLiteralAst]
+                }, $true).Elements | ForEach-Object {
+                # Variable elements have no literal value; keep a placeholder so positions stay aligned.
+                if ($_ -is [System.Management.Automation.Language.StringConstantExpressionAst] -or
+                    $_ -is [System.Management.Automation.Language.ExpandableStringExpressionAst]) {
+                    $_.Value
+                }
+                else {
+                    ''
+                }
+            }
+        )
+    }
+
+    It 'keeps --parameters last so appended template overrides are parsed' {
+        $parametersIndex = $commonArguments.IndexOf('--parameters')
+        $parametersIndex | Should -BeGreaterThan -1
+
+        # az binds --parameters with nargs='+', so any later flag orphans every appended key=value override.
+        @($commonArguments |
+                Select-Object -Skip ($parametersIndex + 1) |
+                Where-Object { $_ -like '--*' }) | Should -BeNullOrEmpty
+    }
+
+    It 'passes the auto-selected Bastion SKU through to the template' {
+        $deploySource = Get-Content (Join-Path $repoRoot 'scripts/Deploy.ps1') -Raw
+        $deploySource | Should -Match 'bastionSku=\$candidateSku'
+        (Get-Content (Join-Path $repoRoot 'infra/main.bicep') -Raw) | Should -Match 'param bastionSku string'
+    }
+
+    It 'does not retry the Bastion SKU when the CLI rejects the command itself' {
+        $deploySource = Get-Content (Join-Path $repoRoot 'scripts/Deploy.ps1') -Raw
+        $deploySource | Should -Match 'unrecognized arguments'
+    }
+}

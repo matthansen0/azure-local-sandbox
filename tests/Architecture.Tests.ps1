@@ -53,7 +53,7 @@ Describe 'Lab topology contract' {
     }
 
     It 'provides enough memory for the intended E32s host' {
-        $nestedMemory = (@($configuration.VMs) | Measure-Object MemoryStartupBytes -Sum).Sum
+        $nestedMemory = (@($configuration.VMs) | ForEach-Object { $_.MemoryStartupBytes } | Measure-Object -Sum).Sum
         $nestedMemory | Should -BeLessOrEqual 240GB
         $nestedMemory | Should -BeGreaterOrEqual 200GB
     }
@@ -243,5 +243,15 @@ Describe 'Azure CLI invocation contract' {
     It 'does not retry the Bastion SKU when the CLI rejects the command itself' {
         $deploySource = Get-Content (Join-Path $repoRoot 'scripts/Deploy.ps1') -Raw
         $deploySource | Should -Match 'unrecognized arguments'
+    }
+}
+
+Describe 'Windows PowerShell 5.1 compatibility' {
+    It 'never binds Measure-Object to a property name' {
+        # Host scripts run under 5.1, which cannot resolve hashtable keys as properties the way
+        # PowerShell 7 does here, so values must be projected before Measure-Object sees them.
+        @(Get-ChildItem (Join-Path $repoRoot 'scripts') -Filter '*.ps1' -Recurse |
+                Select-String -Pattern 'Measure-Object\s+(-Property\s+)?[A-Za-z]' |
+                ForEach-Object { "$($_.Filename):$($_.LineNumber)" }) | Should -BeNullOrEmpty
     }
 }

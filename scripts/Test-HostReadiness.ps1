@@ -35,8 +35,9 @@ $configurationPath = Join-Path $PSScriptRoot '..\config\lab.psd1'
 $requiredHostMemory = 256GB
 if (Test-Path -LiteralPath $configurationPath) {
     $configuration = Import-PowerShellDataFile -LiteralPath $configurationPath
+    # Windows PowerShell 5.1 cannot bind -Property to hashtable keys, so project the values first.
     $requiredHostMemory =
-        (@($configuration.VMs) | Measure-Object -Property MemoryStartupBytes -Sum).Sum + 16GB
+        (@($configuration.VMs) | ForEach-Object { $_.MemoryStartupBytes } | Measure-Object -Sum).Sum + 16GB
 }
 
 Add-ReadinessCheck `

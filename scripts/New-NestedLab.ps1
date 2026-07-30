@@ -109,7 +109,8 @@ function Assert-HostCapacity {
         [hashtable]$Configuration
     )
 
-    $requiredMemory = (@($Configuration.VMs) | Measure-Object -Property MemoryStartupBytes -Sum).Sum
+    # Windows PowerShell 5.1 cannot bind -Property to hashtable keys, so project the values first.
+    $requiredMemory = (@($Configuration.VMs) | ForEach-Object { $_.MemoryStartupBytes } | Measure-Object -Sum).Sum
     $hostMemory = (Get-CimInstance -ClassName Win32_ComputerSystem).TotalPhysicalMemory
     $hostReserve = 16GB
 

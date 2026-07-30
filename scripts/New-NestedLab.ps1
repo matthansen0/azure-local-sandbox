@@ -233,7 +233,8 @@ function Add-LabDataDisk {
     )
 
     if (-not (Test-Path -LiteralPath $Path)) {
-        New-VHD -Path $Path -SizeBytes $SizeBytes -Dynamic | Out-Null
+        # Fixed avoids block-allocation overhead that caps S2D IOPS
+        New-VHD -Path $Path -SizeBytes $SizeBytes -Fixed | Out-Null
     }
 
     $attachedPaths = @(Get-VMHardDiskDrive -VMName $VirtualMachineName | Select-Object -ExpandProperty Path)

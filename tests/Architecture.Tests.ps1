@@ -103,6 +103,16 @@ Describe 'Network isolation contract' {
         $networkTemplate | Should -Match "hostSubnetAddressPrefix string = '172\.31\.1\.0/24'"
         $networkTemplate | Should -Match "bastionSubnetAddressPrefix string = '172\.31\.2\.0/26'"
     }
+
+    It 'prefers the free Bastion Developer SKU in a supported default region' {
+        $networkTemplate | Should -Match "param bastionSku string = 'Developer'"
+        $networkTemplate | Should -Match 'var deployHostedBastion = deployBastion && !useDeveloperBastion'
+
+        $deploymentWrapper = Get-Content (Join-Path $repoRoot 'scripts/Deploy.ps1') -Raw
+        $deploymentWrapper | Should -Match "\`$Location = 'centralus'"
+        $deploymentWrapper | Should -Match "DeveloperSkuRegions"
+        @($dependencies.AzureBastion.DeveloperSkuRegions) | Should -Contain 'centralus'
+    }
 }
 
 Describe 'Credential and artifact contract' {

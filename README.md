@@ -30,7 +30,8 @@ workloads.
 - A clean Git commit containing the exact source being deployed.
 
 The lab is expensive while running and continues to incur disk, Bastion, and NAT
-charges while the VM is deallocated.
+charges while the VM is deallocated. The default `centralus` host region offers
+the free Azure Bastion Developer SKU, which the deployment selects automatically.
 
 ## Quick Start
 
@@ -48,7 +49,7 @@ $env:AZURE_LOCAL_SANDBOX_ADMIN_PASSWORD = '<strong-password>'
 
 ./scripts/Deploy.ps1 `
   -Mode Deploy `
-  -Location eastus `
+  -Location centralus `
   -AzureLocalLocation eastus
 ```
 

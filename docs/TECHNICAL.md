@@ -9,7 +9,7 @@ Azure subscription
 └── Sandbox resource group
     ├── VNet 172.31.0.0/16
     │   ├── Private host subnet + NAT Gateway
-    │   └── Azure Bastion subnet
+    │   └── Azure Bastion subnet (Basic and Standard SKUs only)
     └── LocalBox-Client (Windows Server 2025, Hyper-V)
         ├── AzLHOST1 (Azure Local node)
         ├── AzLHOST2 (Azure Local node)
@@ -72,6 +72,7 @@ Keep:
 - Bicep version and binary SHA-256.
 - PowerShell module versions.
 - Outer host marketplace image coordinates.
+- Azure regions that offer the free Azure Bastion Developer SKU.
 
 Dependency updates are explicit maintenance actions followed by local tests and a real Azure `Validate` deployment.
 
@@ -112,6 +113,7 @@ Custom immutable HTTPS artifact URLs can be supplied instead.
 ## Security And Cost
 
 - The host has no public IP; Bastion is the default ingress.
+- The default host region is `centralus`, where Bastion Developer is free. `Deploy.ps1 -BastionSku Auto` falls back to the Standard SKU, its dedicated subnet, and its public IP in regions without Developer.
 - NAT Gateway provides explicit outbound access.
 - Bootstrap, source archive, media, and Quickstart artifacts are hash-verified.
 - The lab uses a 32-vCPU host, 1-TiB OS disk, eight Premium SSDs, Bastion, and NAT Gateway.

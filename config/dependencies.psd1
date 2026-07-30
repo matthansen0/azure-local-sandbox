@@ -28,4 +28,44 @@
         Offer     = 'WindowsServer'
         Sku       = '2025-datacenter-g2'
     }
+
+    AzureBastion = @{
+        # Regions offering the free Developer SKU, from includes/bastion-developer-regions.md in MicrosoftDocs/azure-docs.
+        # Deploy.ps1 falls back to the Standard SKU for any other region, and also if Azure rejects the Developer SKU.
+        DeveloperSkuRegions = @(
+            'australiacentral'
+            'australiaeast'
+            'australiasoutheast'
+            'brazilsouth'
+            'canadacentral'
+            'canadaeast'
+            'centralindia'
+            'centralus'
+            'eastasia'
+            'eastus2'
+            'francecentral'
+            'germanywestcentral'
+            'italynorth'
+            'japaneast'
+            'japanwest'
+            'koreacentral'
+            'koreasouth'
+            'mexicocentral'
+            'northcentralus'
+            'northeurope'
+            'norwayeast'
+            'southafricanorth'
+            'southeastasia'
+            'southindia'
+            'spaincentral'
+            'swedencentral'
+            'switzerlandnorth'
+            'uaenorth'
+            'uksouth'
+            'ukwest'
+            'westcentralus'
+            'westeurope'
+            'westus'
+        )
+    }
 }

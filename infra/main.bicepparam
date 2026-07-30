@@ -1,6 +1,6 @@
 using './main.bicep'
 
-param location = 'eastus'
+param location = 'centralus'
 param azureLocalLocation = 'eastus'
 param resourceGroupName = 'rg-azure-local-sandbox'
 param namePrefix = 'localbox'
@@ -9,6 +9,7 @@ param adminPassword = readEnvironmentVariable('AZURE_LOCAL_SANDBOX_ADMIN_PASSWOR
 param vmSize = 'Standard_E32s_v6'
 param hostImageVersion = readEnvironmentVariable('AZURE_LOCAL_SANDBOX_HOST_IMAGE_VERSION')
 param deployBastion = true
+param bastionSku = 'Developer'
 param deployBootstrap = true
 param bootstrapScriptUri = readEnvironmentVariable('AZURE_LOCAL_SANDBOX_BOOTSTRAP_URI')
 param bootstrapScriptSha256 = readEnvironmentVariable('AZURE_LOCAL_SANDBOX_BOOTSTRAP_SHA256')

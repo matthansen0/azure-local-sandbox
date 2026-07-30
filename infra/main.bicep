@@ -38,6 +38,14 @@ param hostImageVersion string
 @description('Deploy Azure Bastion for private RDP access. Disabling Bastion leaves the VM accessible only through another private network path or Azure Serial Console.')
 param deployBastion bool = true
 
+@description('Azure Bastion SKU. Developer is free but is offered only in a subset of regions. Deploy.ps1 falls back to Standard where Developer is unavailable.')
+@allowed([
+  'Developer'
+  'Basic'
+  'Standard'
+])
+param bastionSku string = 'Developer'
+
 @description('Run Bootstrap.ps1 through the Custom Script Extension.')
 param deployBootstrap bool = true
 
@@ -82,6 +90,7 @@ module network 'modules/network.bicep' = {
   scope: sandboxResourceGroup
   params: {
     deployBastion: deployBastion
+    bastionSku: bastionSku
     location: location
     namePrefix: namePrefix
     tags: tags
@@ -115,6 +124,7 @@ module host 'modules/host.bicep' = {
 }
 
 output bastionName string = network.outputs.bastionName
+output bastionSku string = network.outputs.bastionSku
 output hostManagedIdentityPrincipalId string = host.outputs.managedIdentityPrincipalId
 output hostPrivateIpAddress string = host.outputs.privateIpAddress
 output hostVirtualMachineId string = host.outputs.virtualMachineId

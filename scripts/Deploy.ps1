@@ -5,9 +5,12 @@ param(
     [ValidateSet('Validate', 'WhatIf', 'Deploy')]
     [string]$Mode = 'Deploy',
 
-    [string]$Location = 'eastus',
+    [string]$Location = 'centralus',
 
-    [string]$AzureLocalLocation = $Location,
+    [string]$AzureLocalLocation = 'eastus',
+
+    [ValidateSet('Auto', 'Developer', 'Basic', 'Standard')]
+    [string]$BastionSku = 'Auto',
 
     [ValidateSet('Standard_E32s_v5', 'Standard_E32s_v6')]
     [string]$VmSize = 'Standard_E32s_v6',
@@ -397,6 +400,17 @@ if (-not $HostImageVersion -or $HostImageVersion -eq 'latest') {
 $env:AZURE_LOCAL_SANDBOX_HOST_IMAGE_VERSION = $HostImageVersion
 Write-Step "Host image version: $HostImageVersion"
 
+if ($BastionSku -eq 'Auto') {
+    $developerRegions = @($dependencies.AzureBastion.DeveloperSkuRegions)
+    $normalizedLocation = $Location.Replace(' ', '').ToLowerInvariant()
+    $script:BastionSkuInUse = if ($developerRegions -contains $normalizedLocation) { 'Developer' } else { 'Standard' }
+    Write-Step "Azure Bastion SKU: $script:BastionSkuInUse (auto-selected for $Location)."
+}
+else {
+    $script:BastionSkuInUse = $BastionSku
+    Write-Step "Azure Bastion SKU: $script:BastionSkuInUse (requested)."
+}
+
 $commonArguments = @(
     '--name', $DeploymentName,
     '--location', $Location,
@@ -410,9 +424,46 @@ $commonArguments = @(
     '--only-show-errors'
 )
 
+function Invoke-SandboxTemplate {
+    param(
+        [Parameter(Mandatory)][string[]]$Operation,
+        [string[]]$ExtraArguments = @(),
+        [switch]$ParseJson
+    )
+
+    # An auto-selected Developer SKU falls back to Standard when Azure rejects it in this region.
+    $candidateSkus = @($script:BastionSkuInUse)
+    if ($BastionSku -eq 'Auto' -and $script:BastionSkuInUse -eq 'Developer') {
+        $candidateSkus += 'Standard'
+    }
+
+    for ($attempt = 0; $attempt -lt $candidateSkus.Count; $attempt++) {
+        $candidateSku = $candidateSkus[$attempt]
+        try {
+            $result = Invoke-AzureCli `
+                -Arguments (
+                    @('deployment', 'sub') +
+                    $Operation +
+                    $commonArguments +
+                    @("bastionSku=$candidateSku") +
+                    $ExtraArguments
+                ) `
+                -ParseJson:$ParseJson
+            $script:BastionSkuInUse = $candidateSku
+            return $result
+        }
+        catch {
+            if ($attempt -eq $candidateSkus.Count - 1 -or $_.Exception.Message -notmatch '(?i)bastion|developer') {
+                throw
+            }
+
+            Write-Warning "Azure rejected the Developer Bastion SKU in '$Location'. Retrying with the Standard SKU. $($_.Exception.Message)"
+        }
+    }
+}
+
 Write-Step 'Validating subscription deployment...'
-Invoke-AzureCli `
-    -Arguments (@('deployment', 'sub', 'validate') + $commonArguments + @('--output', 'none')) |
+Invoke-SandboxTemplate -Operation @('validate') -ExtraArguments @('--output', 'none') |
     Out-Null
 
 switch ($Mode) {
@@ -421,13 +472,13 @@ switch ($Mode) {
     }
     'WhatIf' {
         Write-Step 'Running what-if analysis...'
-        Invoke-AzureCli `
-            -Arguments (@('deployment', 'sub', 'what-if') + $commonArguments + @('--output', 'jsonc'))
+        Invoke-SandboxTemplate -Operation @('what-if') -ExtraArguments @('--output', 'jsonc')
     }
     'Deploy' {
         Write-Step 'Creating Azure Local sandbox host. The template takes roughly 20-30 minutes; track progress in the portal deployment blade.'
-        $deployment = Invoke-AzureCli `
-            -Arguments (@('deployment', 'sub', 'create') + $commonArguments + @('--output', 'json')) `
+        $deployment = Invoke-SandboxTemplate `
+            -Operation @('create') `
+            -ExtraArguments @('--output', 'json') `
             -ParseJson
 
         Write-Step 'Deployment completed.'

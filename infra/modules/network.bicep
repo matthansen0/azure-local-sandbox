@@ -9,6 +9,14 @@ param namePrefix string = 'localbox'
 @description('Deploy Azure Bastion for private RDP access to the sandbox host.')
 param deployBastion bool = true
 
+@description('Azure Bastion SKU. Developer is free but is offered only in a subset of regions and does not use a dedicated subnet or public IP.')
+@allowed([
+  'Developer'
+  'Basic'
+  'Standard'
+])
+param bastionSku string = 'Developer'
+
 @description('Address space for the Azure virtual network. Nested Hyper-V networks must not overlap this range.')
 param virtualNetworkAddressPrefix string = '172.31.0.0/16'
 
@@ -26,6 +34,8 @@ var hostSubnetName = '${namePrefix}-host-subnet'
 var networkSecurityGroupName = '${namePrefix}-host-nsg'
 var natGatewayName = '${namePrefix}-nat'
 var bastionName = '${namePrefix}-bastion'
+var useDeveloperBastion = bastionSku == 'Developer'
+var deployHostedBastion = deployBastion && !useDeveloperBastion
 
 resource hostNetworkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
   name: networkSecurityGroupName
@@ -92,7 +102,7 @@ resource hostSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = {
   }
 }
 
-resource bastionSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = if (deployBastion) {
+resource bastionSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = if (deployHostedBastion) {
   parent: virtualNetwork
   name: 'AzureBastionSubnet'
   properties: {
@@ -101,7 +111,7 @@ resource bastionSubnet 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' = 
   }
 }
 
-resource bastionPublicIp 'Microsoft.Network/publicIPAddresses@2024-05-01' = if (deployBastion) {
+resource bastionPublicIp 'Microsoft.Network/publicIPAddresses@2024-05-01' = if (deployHostedBastion) {
   name: '${bastionName}-pip'
   location: location
   tags: tags
@@ -114,12 +124,12 @@ resource bastionPublicIp 'Microsoft.Network/publicIPAddresses@2024-05-01' = if (
   }
 }
 
-resource bastionHost 'Microsoft.Network/bastionHosts@2024-05-01' = if (deployBastion) {
+resource bastionHost 'Microsoft.Network/bastionHosts@2024-05-01' = if (deployHostedBastion) {
   name: bastionName
   location: location
   tags: tags
   sku: {
-    name: 'Basic'
+    name: bastionSku
   }
   properties: {
     ipConfigurations: [
@@ -138,6 +148,22 @@ resource bastionHost 'Microsoft.Network/bastionHosts@2024-05-01' = if (deployBas
   }
 }
 
+// The Developer SKU attaches directly to the virtual network and rejects ipConfigurations.
+resource developerBastionHost 'Microsoft.Network/bastionHosts@2024-05-01' = if (deployBastion && useDeveloperBastion) {
+  name: bastionName
+  location: location
+  tags: tags
+  sku: {
+    name: bastionSku
+  }
+  properties: {
+    virtualNetwork: {
+      id: virtualNetwork.id
+    }
+  }
+}
+
 output hostSubnetId string = hostSubnet.id
 output virtualNetworkId string = virtualNetwork.id
-output bastionName string = deployBastion ? bastionHost.name : ''
+output bastionName string = deployBastion ? bastionName : ''
+output bastionSku string = deployBastion ? bastionSku : ''

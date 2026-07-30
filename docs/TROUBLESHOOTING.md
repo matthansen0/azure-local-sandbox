@@ -125,7 +125,13 @@ az feature register --namespace Microsoft.Network --name AllowBringYourOwnPublic
 az provider register --namespace Microsoft.Network
 ```
 
-Passing `deployBastion = false` in `infra/main.bicepparam` is not a workaround. It removes only the Bastion public IP; the NAT Gateway still requires one for outbound access.
+Passing `deployBastion = false` in `infra/main.bicepparam` is not a workaround. It removes only the Bastion public IP, which the Developer SKU does not create anyway; the NAT Gateway still requires one for outbound access.
+
+### Bastion deployment fails on the Developer SKU
+
+The Developer SKU is offered only in the regions listed in `config/dependencies.psd1`. `Deploy.ps1 -BastionSku Auto` picks Standard elsewhere and retries once with Standard if Azure rejects the Developer SKU. If the region list is stale, deploy with an explicit `-BastionSku Standard` and update the list.
+
+The Developer SKU also allows only one VM session at a time and does not support virtual network peering. Use `-BastionSku Standard` when either limit matters.
 
 ### Arc registration waits or times out
 

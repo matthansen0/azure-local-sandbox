@@ -13,7 +13,7 @@ Return to the [project overview](../README.md) or see [troubleshooting](TROUBLES
 
 - A subscription where you can register resource providers, create role assignments, and deploy resources. Subscription `Owner` is the simplest sandbox permission model.
 - Quota for `Standard_E32s_v5` or `Standard_E32s_v6` in the host region.
-- An Azure Local-supported registration region.
+- An Azure Local-supported registration region, which can differ from the host region.
 - Policies that allow VM extensions, managed identities, Key Vault, Storage, Hybrid Compute, Azure Local, and role assignments.
 - Direct outbound HTTPS access. Proxy and Azure Arc Gateway modes are not implemented.
 
@@ -59,7 +59,7 @@ az login
 az account set --subscription '<subscription-id>'
 ```
 
-Set the outer VM administrator password:
+The outer VM administrator username is `localadmin`. Set its password:
 
 ```powershell
 $env:AZURE_LOCAL_SANDBOX_ADMIN_PASSWORD = '<strong-password>'
@@ -68,7 +68,7 @@ $env:AZURE_LOCAL_SANDBOX_ADMIN_PASSWORD = '<strong-password>'
 Preview the deployment:
 
 ```powershell
-./scripts/Deploy.ps1 -Mode WhatIf -Location eastus
+./scripts/Deploy.ps1 -Mode WhatIf -Location centralus
 ```
 
 If `Microsoft.AzureStackHCI` has never been registered, the tenant resource-provider principal might not exist for a side-effect-free preview. Register that provider, pass `-HciResourceProviderObjectId`, or proceed with `-Mode Deploy`, which registers the provider baseline first.
@@ -78,11 +78,11 @@ Deploy:
 ```powershell
 ./scripts/Deploy.ps1 `
   -Mode Deploy `
-  -Location eastus `
+  -Location centralus `
   -AzureLocalLocation eastus
 ```
 
-The host and Azure Local regions can differ:
+The defaults are `-Location centralus` for the outer host and `-AzureLocalLocation eastus` for Arc registration and the cluster resource. The two regions are independent:
 
 ```powershell
 ./scripts/Deploy.ps1 `
@@ -91,9 +91,19 @@ The host and Azure Local regions can differ:
   -AzureLocalLocation eastus
 ```
 
+### Azure Bastion SKU
+
+`-BastionSku` defaults to `Auto`:
+
+- `Developer` is selected when the host region offers it. The Developer SKU is free, uses shared infrastructure, needs no `AzureBastionSubnet` or public IP, allows one VM session at a time, and does not support virtual network peering. `centralus` is a Developer region; `eastus` is not.
+- `Standard` is selected in every other region, and the deployment creates the `AzureBastionSubnet` and a Bastion public IP.
+- If Azure rejects the auto-selected Developer SKU, the script retries once with `Standard`.
+
+Pass `-BastionSku Developer`, `-BastionSku Basic`, or `-BastionSku Standard` to override the choice. The supported Developer regions are listed in [config/dependencies.psd1](../config/dependencies.psd1).
+
 The script resolves an exact Windows Server marketplace image, verifies the pinned Bicep version, creates private deployment artifacts, and deploys the resource group.
 
-Bootstrap installs Hyper-V and initiates one reboot. Connect through Bastion and wait for readiness:
+Bootstrap installs Hyper-V and initiates one reboot. Connect through Bastion as `localadmin`, using the password set in `AZURE_LOCAL_SANDBOX_ADMIN_PASSWORD`, and wait for readiness:
 
 ```powershell
 Set-Location C:\AzureLocalSandbox\Source

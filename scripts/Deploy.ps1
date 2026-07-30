@@ -242,6 +242,11 @@ function Publish-PrivateArtifact {
             '--min-tls-version', 'TLS1_2',
             '--allow-blob-public-access', 'false',
             '--allow-shared-key-access', 'false',
+            # New storage accounts default to disabled public network access, which blocks
+            # both the staging client and the VM extension download over the SAS URLs.
+            '--public-network-access', 'Enabled',
+            '--default-action', 'Allow',
+            '--bypass', 'AzureServices',
             '--query', 'id',
             '--only-show-errors',
             '--output', 'tsv'

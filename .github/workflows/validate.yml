@@ -1,0 +1,63 @@
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: PowerShell 7 and Bicep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned PowerShell modules
+        shell: pwsh
+        run: |
+          $dependencies = Import-PowerShellDataFile ./config/dependencies.psd1
+          foreach ($module in @($dependencies.PowerShellModules.Pester, $dependencies.PowerShellModules.PSScriptAnalyzer)) {
+            Install-Module -Name $module.Name -RequiredVersion $module.Version -Force -Scope CurrentUser -AllowClobber
+          }
+
+      - name: Install pinned Bicep
+        shell: pwsh
+        run: |
+          $bicep = (Import-PowerShellDataFile ./config/dependencies.psd1).Bicep
+          Invoke-WebRequest -Uri $bicep.DownloadUri -OutFile "$HOME/bicep"
+          $actualHash = (Get-FileHash "$HOME/bicep" -Algorithm SHA256).Hash
+          if ($actualHash -ne $bicep.Sha256) {
+            throw "Bicep hash mismatch. Expected $($bicep.Sha256), got $actualHash."
+          }
+          chmod +x "$HOME/bicep"
+          $HOME | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Run validation suite
+        shell: pwsh
+        run: ./tests/Invoke-Tests.ps1
+
+  windows:
+    name: Windows PowerShell 5.1
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report the PowerShell edition under test
+        shell: powershell
+        run: $PSVersionTable | Format-List
+
+      - name: Install pinned Pester
+        shell: powershell
+        run: |
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          Install-PackageProvider -Name NuGet -Force | Out-Null
+          $pester = (Import-PowerShellDataFile ./config/dependencies.psd1).PowerShellModules.Pester
+          Install-Module -Name $pester.Name -RequiredVersion $pester.Version -Force -Scope CurrentUser -SkipPublisherCheck -AllowClobber
+
+      - name: Execute host script logic
+        shell: powershell
+        run: ./tests/Invoke-WindowsTests.ps1

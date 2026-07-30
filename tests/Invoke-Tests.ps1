@@ -40,6 +40,24 @@ if ($analysisIssues.Count -gt 0) {
     throw "PSScriptAnalyzer reported $($analysisIssues.Count) issue(s)."
 }
 
+# Host scripts run under Windows PowerShell 5.1, so reject PowerShell 7 only syntax and cmdlets.
+$compatibilityIssues = @(
+    Invoke-ScriptAnalyzer `
+        -Path (Join-Path $repoRoot 'scripts') `
+        -Recurse `
+        -IncludeRule PSUseCompatibleSyntax, PSUseCompatibleCmdlets `
+        -Settings @{
+            Rules = @{
+                PSUseCompatibleSyntax  = @{ Enable = $true; TargetVersions = @('5.1') }
+                PSUseCompatibleCmdlets = @{ Enable = $true; compatibility = @('desktop-5.1.14393.206-windows') }
+            }
+        }
+)
+if ($compatibilityIssues.Count -gt 0) {
+    $compatibilityIssues | Format-Table ScriptName, Line, RuleName, Message -Wrap
+    throw "PSScriptAnalyzer reported $($compatibilityIssues.Count) Windows PowerShell 5.1 compatibility issue(s)."
+}
+
 if (-not $SkipBicep) {
     $bicepCommand = Get-Command $BicepExecutable -ErrorAction SilentlyContinue
     if (-not $bicepCommand) {

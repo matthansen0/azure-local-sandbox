@@ -115,7 +115,9 @@ Readiness checks the host OS, virtualization extensions, memory, storage, Hyper-
 ## 2. Continue Inside The VM
 
 1. Connect to `LocalBox-Client` through Azure Bastion.
-2. Download both ISOs inside the VM.
+2. Download these two ISO files inside `LocalBox-Client`:
+  - **Windows Server 2025** from a licensed Microsoft channel or the [Microsoft Evaluation Center](https://www.microsoft.com/evalcenter/download-windows-server-2025). This becomes the parent disk for the nested management host.
+  - **Azure Local** from **Azure portal > Azure Local > Get started > Download software**. Select the subscription and release, accept the license terms, and download the ISO. This becomes the parent disk for the two Azure Local nodes.
 3. Double-click **Azure Local Sandbox Setup** on the public desktop.
 4. Approve elevation.
 5. Select both ISO files.

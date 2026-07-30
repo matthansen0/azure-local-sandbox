@@ -93,6 +93,11 @@ Describe 'Host script execution under Windows PowerShell' -Skip:([System.Environ
     It 'builds install image metadata that includes Version' {
         Set-StrictMode -Version Latest
 
+        # Windows PowerShell 5.1 Join-Path resolves the drive, so the simulated mount point must exist.
+        if (-not (Get-PSDrive -Name 'X' -ErrorAction SilentlyContinue)) {
+            $null = New-PSDrive -Name 'X' -PSProvider FileSystem -Root $env:TEMP
+        }
+
         $convertScript = Join-Path $repoRoot 'scripts\Convert-LabIsoMedia.ps1'
         $convertAst = [System.Management.Automation.Language.Parser]::ParseFile($convertScript, [ref]$null, [ref]$null)
         $functionAst = $convertAst.Find({

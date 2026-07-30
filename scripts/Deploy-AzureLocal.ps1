@@ -318,6 +318,15 @@ $null = Connect-AzAccount `
     -Tenant $context.tenantId `
     -Subscription $context.subscriptionId
 
+# The vault name is derived from subscription and resource group, so a rebuilt group hits its own soft-deleted vault.
+$deletedVaultResponse = Invoke-AzRestMethod `
+    -Method GET `
+    -Path "/subscriptions/$($context.subscriptionId)/providers/Microsoft.KeyVault/locations/$($context.azureLocation)/deletedVaults/$($deploymentParameters.keyVaultName)?api-version=2023-07-01" `
+    -ErrorAction SilentlyContinue
+if ($deletedVaultResponse -and $deletedVaultResponse.StatusCode -eq 200) {
+    throw "Key vault '$($deploymentParameters.keyVaultName)' is soft-deleted in '$($context.azureLocation)' and blocks redeployment. Purge it first: az keyvault purge --name $($deploymentParameters.keyVaultName) --location $($context.azureLocation)"
+}
+
 New-Item -Path $ArtifactsPath -ItemType Directory -Force | Out-Null
 $templatePath = Join-Path $ArtifactsPath 'azure-local-create-cluster.json'
 $templateDownloadPath = "${templatePath}.download"

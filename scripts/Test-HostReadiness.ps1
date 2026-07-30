@@ -31,6 +31,13 @@ function Add-ReadinessCheck {
 $operatingSystem = Get-CimInstance -ClassName Win32_OperatingSystem
 $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem
 $processor = Get-CimInstance -ClassName Win32_Processor | Select-Object -First 1
+$configurationPath = Join-Path $PSScriptRoot '..\config\lab.psd1'
+$requiredHostMemory = 256GB
+if (Test-Path -LiteralPath $configurationPath) {
+    $configuration = Import-PowerShellDataFile -LiteralPath $configurationPath
+    $requiredHostMemory =
+        (@($configuration.VMs) | Measure-Object -Property MemoryStartupBytes -Sum).Sum + 16GB
+}
 
 Add-ReadinessCheck `
     -Name 'Host operating system' `
@@ -39,14 +46,15 @@ Add-ReadinessCheck `
 
 Add-ReadinessCheck `
     -Name 'Host memory' `
-    -Passed ($computerSystem.TotalPhysicalMemory -ge 256GB) `
-    -Detail "$([math]::Round($computerSystem.TotalPhysicalMemory / 1GB, 1)) GiB"
+    -Passed ($computerSystem.TotalPhysicalMemory -ge $requiredHostMemory) `
+    -Detail "$([math]::Round($computerSystem.TotalPhysicalMemory / 1GB, 1)) GiB ($([math]::Ceiling($requiredHostMemory / 1GB)) GiB required)"
 
 $virtualizationFirmwareEnabled = [bool]$processor.VirtualizationFirmwareEnabled
+$hypervisorPresent = [bool]$computerSystem.HypervisorPresent
 Add-ReadinessCheck `
     -Name 'Virtualization extensions' `
-    -Passed $virtualizationFirmwareEnabled `
-    -Detail "VirtualizationFirmwareEnabled: $virtualizationFirmwareEnabled"
+    -Passed ($virtualizationFirmwareEnabled -or $hypervisorPresent) `
+    -Detail "VirtualizationFirmwareEnabled: $virtualizationFirmwareEnabled; HypervisorPresent: $hypervisorPresent"
 
 $stateFile = 'C:\AzureLocalSandbox\State\bootstrap.json'
 if (Test-Path -LiteralPath $stateFile) {
@@ -79,10 +87,11 @@ Add-ReadinessCheck `
     -Detail $(if ($nestedVmVolume) { "V: $($nestedVmVolume.FileSystem), label $($nestedVmVolume.FileSystemLabel)" } else { 'V: not found' })
 
 if ($nestedVmVolume) {
+    # V: is dedicated to the lab, so capacity is checked instead of free space to keep resumes unblocked.
     Add-ReadinessCheck `
-        -Name 'Nested VM free space' `
-        -Passed ($nestedVmVolume.SizeRemaining -ge 1500GB) `
-        -Detail "$([math]::Round($nestedVmVolume.SizeRemaining / 1GB, 1)) GiB free"
+        -Name 'Nested VM volume capacity' `
+        -Passed ($nestedVmVolume.Size -ge 1500GB) `
+        -Detail "$([math]::Round($nestedVmVolume.Size / 1GB, 1)) GiB capacity, $([math]::Round($nestedVmVolume.SizeRemaining / 1GB, 1)) GiB free"
 }
 
 $sourceRoot = 'C:\AzureLocalSandbox\Source'

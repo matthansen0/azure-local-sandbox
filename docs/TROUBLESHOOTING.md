@@ -64,8 +64,8 @@ Confirm:
 
 - The VM uses Windows Server 2025.
 - The selected SKU exposes nested virtualization.
-- At least 256 GiB RAM is available.
-- At least 1.5 TiB remains free on `V:`.
+- Host RAM covers the configured topology plus a 16 GiB host reserve, which is 236 GiB for the default profile.
+- `V:` provides at least 1.5 TiB of capacity.
 - Hyper-V, `InternalSwitch`, `InternalNAT`, and host NAT are present.
 - `C:\AzureLocalSandbox\Source` contains the staged scripts and configuration.
 
@@ -138,7 +138,7 @@ The Developer SKU also allows only one VM session at a time and does not support
 Check from each Azure Local node:
 
 - DNS resolves the lab domain.
-- `management.azure.com:443` is reachable.
+- `management.azure.com`, `login.microsoftonline.com`, `gbl.his.arc.azure.com`, and `aka.ms` are reachable on port 443. The registration script probes all four before it starts onboarding, so a blocked endpoint fails fast instead of part way through a 20 minute run.
 - Time is synchronized.
 - The node still belongs to `WORKGROUP` before cloud deployment.
 - `Invoke-AzStackHciArcInitialization` is available in the Azure Local image.
@@ -150,6 +150,18 @@ The registration script prints each node's current Arc status while polling.
 Review the deterministic `azure-local-validate` deployment in the sandbox resource group. Do not repeatedly rerun validation after Microsoft reports the environment in a deployment-failed state unless the documented recovery procedure requires it.
 
 `Deploy-AzureLocal.ps1 -Mode Deploy` requires a successful validation and the exact same pinned Quickstart template hash.
+
+### Key vault name is already in use after deleting the resource group
+
+The key vault name is derived from the subscription ID and resource group name, so it is identical every time you rebuild the same sandbox. Azure always soft-deletes key vaults, so deleting the resource group leaves the old vault reserving that name for its 30 day retention window and the next validation fails to create it.
+
+`Deploy-AzureLocal.ps1` checks for this before submitting the deployment and prints the vault name to purge. Purge protection is not enabled, so recovery is:
+
+```powershell
+az keyvault purge --name <vault-name> --location <azure-location>
+```
+
+The managed identity is scoped to the resource group and may not be able to read subscription-level deleted vaults, in which case the preflight check is skipped and Azure reports the conflict during validation instead. Run `az keyvault list-deleted --resource-type vault` from your workstation to confirm.
 
 ### Commit has not been pushed
 

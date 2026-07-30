@@ -143,7 +143,6 @@ $readinessResults = foreach ($nodeConfiguration in $nodeConfigurations) {
 
             Set-StrictMode -Version Latest
             $ErrorActionPreference = 'Stop'
-            $azureResourceManagerHost = 'management.azure.com'
 
             $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem
             if ($computerSystem.PartOfDomain) {
@@ -162,8 +161,25 @@ $readinessResults = foreach ($nodeConfiguration in $nodeConfigurations) {
                 -ServerAddresses @($DomainControllerIp)
 
             $null = Resolve-DnsName -Name $DomainFqdn -Type SOA -ErrorAction Stop
-            if (-not (Test-NetConnection -ComputerName $azureResourceManagerHost -Port 443 -InformationLevel Quiet)) {
-                throw "'$env:COMPUTERNAME' cannot reach Azure Resource Manager over HTTPS."
+            # Arc onboarding fails deep into a 10-20 minute run if any of these are blocked.
+            $requiredEndpoints = @(
+                'management.azure.com'
+                'login.microsoftonline.com'
+                'gbl.his.arc.azure.com'
+                'aka.ms'
+            )
+            $unreachableEndpoints = @(
+                $requiredEndpoints | Where-Object {
+                    -not (Test-NetConnection `
+                        -ComputerName $_ `
+                        -Port 443 `
+                        -InformationLevel Quiet `
+                        -ErrorAction SilentlyContinue `
+                        -WarningAction SilentlyContinue)
+                }
+            )
+            if ($unreachableEndpoints.Count -gt 0) {
+                throw "'$env:COMPUTERNAME' cannot reach these endpoints over HTTPS: $($unreachableEndpoints -join ', ')."
             }
 
             w32tm.exe /config /manualpeerlist:"$DomainControllerIp,0x8" /syncfromflags:manual /update | Out-Null

@@ -79,23 +79,23 @@ Deploy:
 ./scripts/Deploy.ps1 `
   -Mode Deploy `
   -Location centralus `
-  -AzureLocalLocation eastus
+  -AzureLocalLocation centralus
 ```
 
-The defaults are `-Location centralus` for the outer host and `-AzureLocalLocation eastus` for Arc registration and the cluster resource. The two regions are independent:
+Use `-Location` and `-AzureLocalLocation` to control the host and Arc/cluster regions independently:
 
 ```powershell
 ./scripts/Deploy.ps1 `
   -Mode Deploy `
   -Location westus3 `
-  -AzureLocalLocation eastus
+  -AzureLocalLocation centralus
 ```
 
 ### Azure Bastion SKU
 
 `-BastionSku` defaults to `Auto`:
 
-- `Developer` is selected when the host region offers it. The Developer SKU is free, uses shared infrastructure, needs no `AzureBastionSubnet` or public IP, allows one VM session at a time, and does not support virtual network peering. `centralus` is a Developer region; `eastus` is not.
+- `Developer` is selected when the host region offers it. The Developer SKU is free, uses shared infrastructure, needs no `AzureBastionSubnet` or public IP, allows one VM session at a time, and does not support virtual network peering. `centralus` is a Developer region.
 - `Standard` is selected in every other region, and the deployment creates the `AzureBastionSubnet` and a Bastion public IP.
 - If Azure rejects the auto-selected Developer SKU, the script retries once with `Standard`.
 

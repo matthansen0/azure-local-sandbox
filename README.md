@@ -16,7 +16,7 @@ workloads.
 
 ## What It Builds
 
-- A private `Standard_E32s_v5` or `Standard_E32s_v6` Azure VM with Bastion and NAT Gateway.
+- A private `Standard_E32s_v6` Azure VM with Bastion and NAT Gateway.
 - `AzLHOST1` and `AzLHOST2` as nested Azure Local nodes.
 - `AzLMGMT` as a nested Hyper-V host running `JumpstartDC` and `Vm-Router`.
 - Active Directory, DNS, routing, Azure Arc registration, and Azure Local cloud deployment.
@@ -32,6 +32,17 @@ workloads.
 The lab is expensive while running and continues to incur disk, Bastion, and NAT
 charges while the VM is deallocated. The default `centralus` host region offers
 the free Azure Bastion Developer SKU, which the deployment selects automatically.
+
+Approximate pay-as-you-go costs (Central US, `Standard_E32s_v6` with 8× 1 TiB
+Premium SSD data disks):
+
+| State | Cost |
+|---|---|
+| Running | ~$3.90/hour (~$94/day) |
+| Deallocated | ~$1.70/hour (~$41/day) |
+
+Deallocated cost is disk charges only (9× P30). Deallocate the VM when not in use
+and delete the resource group when the lab is no longer needed.
 
 ## Quick Start
 

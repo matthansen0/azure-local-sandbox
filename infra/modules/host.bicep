@@ -77,7 +77,7 @@ param dataDiskCount int = 8
 
 @description('Size in GiB of each nested VM data disk.')
 @minValue(128)
-param dataDiskSizeGiB int = 256
+param dataDiskSizeGiB int = 1024
 
 @description('Tags applied to host resources.')
 param tags object = {}

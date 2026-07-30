@@ -40,6 +40,15 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+function Write-Step {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Message
+    )
+
+    Write-Information "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] $Message" -InformationAction Continue
+}
+
 function Get-FreeDriveLetter {
     $usedDriveLetters = @(Get-Volume | Where-Object DriveLetter | Select-Object -ExpandProperty DriveLetter)
     foreach ($driveLetter in [char[]](90..70)) {
@@ -58,6 +67,7 @@ function Get-IsoInstallImage {
     )
 
     $resolvedIsoPath = (Resolve-Path -LiteralPath $IsoPath).Path
+    Write-Step "Mounting $(Split-Path -Leaf $resolvedIsoPath)..."
     $diskImage = Mount-DiskImage -ImagePath $resolvedIsoPath -PassThru
     try {
         $volume = $diskImage | Get-Volume | Where-Object DriveLetter | Select-Object -First 1
@@ -109,6 +119,7 @@ function Assert-SourceHash {
         throw "SHA-256 mismatch for '$Path'. Expected $ExpectedSha256; received $actualHash."
     }
 
+    Write-Step "Verified $(Split-Path -Leaf $Path)."
     return $actualHash
 }
 
@@ -155,6 +166,7 @@ function Convert-InstallImageToVhdx {
     $mountedVhd = $null
 
     try {
+        Write-Step "Creating $(Split-Path -Leaf $DestinationPath) and partitioning it..."
         New-VHD -Path $DestinationPath -SizeBytes $DiskSizeBytes -Dynamic -BlockSizeBytes 1MB | Out-Null
         $mountedVhd = Mount-VHD -Path $DestinationPath -Passthru
         $disk = $mountedVhd | Get-Disk | Initialize-Disk -PartitionStyle GPT -PassThru
@@ -183,6 +195,7 @@ function Convert-InstallImageToVhdx {
             -NewFileSystemLabel 'Windows' `
             -Confirm:$false | Out-Null
 
+        Write-Step "Applying image index $ImageIndex ('$($selectedImage[0].ImageName)') with DISM. This takes several minutes..."
         $dismOutput = & dism.exe `
             /Apply-Image `
             "/ImageFile:$($InstallImage.InstallImagePath)" `
@@ -202,6 +215,7 @@ function Convert-InstallImageToVhdx {
         }
 
         $conversionSucceeded = $true
+        Write-Step "Applied boot files to $(Split-Path -Leaf $DestinationPath)."
     }
     finally {
         if ($mountedVhd) {
@@ -212,6 +226,7 @@ function Convert-InstallImageToVhdx {
         }
     }
 
+    Write-Step "Hashing $(Split-Path -Leaf $DestinationPath)..."
     $destinationHash = (Get-FileHash -LiteralPath $DestinationPath -Algorithm SHA256).Hash
     return [pscustomobject]@{
         Path       = $DestinationPath
@@ -259,6 +274,7 @@ try {
         throw 'Specify both image indexes. Run this script with -ListImages to inspect the media.'
     }
 
+    Write-Step 'Verifying the publisher SHA-256 of both ISOs. Large media takes several minutes...'
     $windowsSourceHash = Assert-SourceHash `
         -Path $windowsInstallImage.IsoPath `
         -ExpectedSha256 $WindowsServerIsoSha256

@@ -20,6 +20,15 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+function Write-Step {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Message
+    )
+
+    Write-Information "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] $Message" -InformationAction Continue
+}
+
 function Wait-PowerShellDirect {
     param(
         [Parameter(Mandatory)]
@@ -67,16 +76,20 @@ if ($configuration.SchemaVersion -ne 2) {
 foreach ($virtualMachineConfiguration in @($configuration.VMs)) {
     $virtualMachine = Get-VM -Name $virtualMachineConfiguration.Name -ErrorAction Stop
     if ($virtualMachine.State -eq 'Off') {
+        Write-Step "Starting $($virtualMachine.Name)..."
         Start-VM -VM $virtualMachine
     }
 
+    Write-Step "Waiting for PowerShell Direct on $($virtualMachine.Name). First boot specialization can take up to $GuestReadyTimeoutMinutes minutes..."
     Wait-PowerShellDirect `
         -VirtualMachineName $virtualMachine.Name `
         -Credential $LocalAdministratorCredential `
         -TimeoutMinutes $GuestReadyTimeoutMinutes
+    Write-Step "$($virtualMachine.Name) is responding to PowerShell Direct."
 }
 
 $results = foreach ($virtualMachineConfiguration in @($configuration.VMs)) {
+    Write-Step "Configuring networking inside $($virtualMachineConfiguration.Name)..."
     Invoke-Command `
         -VMName $virtualMachineConfiguration.Name `
         -Credential $LocalAdministratorCredential `
@@ -292,6 +305,7 @@ $guestDiskState = Get-Content `
     -LiteralPath 'C:\AzureLocalSandbox\State\guest-disks.json' `
     -Raw | ConvertFrom-Json
 $expectedParentImageHash = $guestDiskState.managementParentImage.Sha256
+Write-Step 'Verifying the nested parent image inside AzLMGMT. Hashing takes several minutes...'
 $actualParentImageHash = Invoke-Command `
     -VMName 'AzLMGMT' `
     -Credential $LocalAdministratorCredential `

@@ -27,6 +27,15 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+function Write-Step {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Message
+    )
+
+    Write-Information "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] $Message" -InformationAction Continue
+}
+
 function Install-RequiredAzModule {
     param(
         [Parameter(Mandatory)]
@@ -40,6 +49,7 @@ function Install-RequiredAzModule {
         return
     }
 
+    Write-Step "Installing PowerShell module $Name $Version from PSGallery..."
     if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
         Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
     }
@@ -119,6 +129,7 @@ if ($nodeConfigurations.Count -ne 2) {
 }
 
 $readinessResults = foreach ($nodeConfiguration in $nodeConfigurations) {
+    Write-Step "Checking Arc readiness on $($nodeConfiguration.Name)..."
     Invoke-Command `
         -VMName $nodeConfiguration.Name `
         -Credential $LocalAdministratorCredential `
@@ -191,6 +202,7 @@ Import-Module `
     -RequiredVersion $dependencies.PowerShellModules.AzConnectedMachine.Version `
     -Force
 
+Write-Step 'Signing in to Azure with the host managed identity...'
 $null = Connect-AzAccount `
     -Identity `
     -Tenant $context.tenantId `
@@ -214,6 +226,7 @@ $registrationResults = foreach ($nodeConfiguration in $nodeConfigurations) {
     $armAccessToken = ConvertFrom-SecureToken -Token $accessTokenResponse.Token
     $accountId = (Get-AzContext).Account.Id
     try {
+        Write-Step "Running Invoke-AzStackHciArcInitialization on $($nodeConfiguration.Name). This takes 10-20 minutes per node..."
         Invoke-Command `
             -VMName $nodeConfiguration.Name `
             -Credential $LocalAdministratorCredential `
@@ -282,7 +295,7 @@ do {
             }
         }
     ) -join '; '
-    Write-Information "Waiting for Azure Arc: $statusSummary" -InformationAction Continue
+    Write-Step "Waiting for Azure Arc: $statusSummary"
     Start-Sleep -Seconds 30
 } while ((Get-Date) -lt $deadline)
 

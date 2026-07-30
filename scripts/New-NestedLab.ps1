@@ -12,6 +12,15 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Write-Step {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Message
+    )
+
+    Write-Information "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] $Message" -InformationAction Continue
+}
+
 function Get-DeterministicMacAddress {
     param(
         [Parameter(Mandatory)]
@@ -242,6 +251,7 @@ function Initialize-LabVirtualMachine {
     )
 
     $virtualMachineName = $VirtualMachineConfiguration.Name
+    Write-Step "Preparing VM $virtualMachineName ($($VirtualMachineConfiguration.Role))..."
     $virtualMachinePath = Join-Path $VmRoot $virtualMachineName
     $operatingSystemDiskPath = Join-Path $virtualMachinePath "$virtualMachineName-OS.vhdx"
     New-Item -Path $virtualMachinePath -ItemType Directory -Force | Out-Null
@@ -369,6 +379,7 @@ if ($Start) {
     foreach ($virtualMachineConfiguration in @($configuration.VMs)) {
         $virtualMachine = Get-VM -Name $virtualMachineConfiguration.Name
         if ($virtualMachine.State -eq 'Off') {
+            Write-Step "Starting $($virtualMachine.Name)..."
             Start-VM -VM $virtualMachine
         }
     }

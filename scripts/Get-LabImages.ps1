@@ -34,6 +34,15 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+function Write-Step {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Message
+    )
+
+    Write-Information "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] $Message" -InformationAction Continue
+}
+
 function Get-ExpectedHash {
     param(
         [string]$Hash,
@@ -71,8 +80,10 @@ function Save-VerifiedImage {
     )
 
     if (Test-Path -LiteralPath $DestinationPath) {
+        Write-Step "$Name already exists; verifying its SHA-256. Large images take several minutes..."
         $existingHash = (Get-FileHash -LiteralPath $DestinationPath -Algorithm SHA256).Hash
         if ($existingHash -eq $ExpectedHash) {
+            Write-Step "$Name is already verified."
             return [pscustomobject]@{
                 Name   = $Name
                 Path   = $DestinationPath
@@ -90,6 +101,7 @@ function Save-VerifiedImage {
     Remove-Item -LiteralPath $partialPath -Force -ErrorAction SilentlyContinue
 
     try {
+        Write-Step "Downloading $Name from $($SourceUri.Host). Multi-gigabyte images take a long time..."
         Start-BitsTransfer `
             -Source $SourceUri.AbsoluteUri `
             -Destination $partialPath `
@@ -97,12 +109,14 @@ function Save-VerifiedImage {
             -Description "Downloading verified $Name parent image" `
             -Priority Foreground
 
+        Write-Step "Verifying the SHA-256 of $Name..."
         $actualHash = (Get-FileHash -LiteralPath $partialPath -Algorithm SHA256).Hash
         if ($actualHash -ne $ExpectedHash) {
             throw "SHA-256 mismatch for '$Name'. Expected $ExpectedHash; received $actualHash."
         }
 
         Move-Item -LiteralPath $partialPath -Destination $DestinationPath -Force
+        Write-Step "$Name is downloaded and verified."
     }
     finally {
         Remove-Item -LiteralPath $partialPath -Force -ErrorAction SilentlyContinue

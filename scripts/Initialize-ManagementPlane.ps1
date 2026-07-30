@@ -33,6 +33,15 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+function Write-Step {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Message
+    )
+
+    Write-Information "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] $Message" -InformationAction Continue
+}
+
 function ConvertTo-UnattendPassword {
     param([Parameter(Mandatory)][SecureString]$Password)
 
@@ -106,6 +115,7 @@ function Wait-NestedPowerShellDirect {
         [int]$TimeoutMinutes
     )
 
+    Write-Step "Waiting for PowerShell Direct on nested VM $VirtualMachineName (timeout $TimeoutMinutes minutes)..."
     $ready = Invoke-Command `
         -Session $ManagementSession `
         -ArgumentList $VirtualMachineName, $Credential, $TimeoutMinutes `
@@ -183,10 +193,12 @@ if ($LcmCredential.Password.Length -lt 14) {
     throw 'The LCM deployment password must be at least 14 characters long.'
 }
 
+Write-Step 'Connecting to AzLMGMT over PowerShell Direct...'
 $managementSession = New-PSSession `
     -VMName 'AzLMGMT' `
     -Credential $LocalAdministratorCredential
 try {
+    Write-Step 'Creating the nested router and domain controller VMs inside AzLMGMT...'
     $dcUnattend = ConvertTo-UnattendDocument `
         -HostName $configuration.Domain.DomainControllerName `
         -AdministratorPassword $DomainAdministratorCredential.Password
@@ -413,6 +425,7 @@ exit /b 0
         }
 
     $domainControllerName = $configuration.Domain.DomainControllerName
+    Write-Step 'Starting the nested router and domain controller...'
     Invoke-Command -Session $managementSession -ArgumentList $domainControllerName -ScriptBlock {
         param([string]$DomainControllerName)
 
@@ -430,6 +443,7 @@ exit /b 0
         -Credential $LocalAdministratorCredential `
         -TimeoutMinutes $GuestReadyTimeoutMinutes
 
+    Write-Step 'Configuring routing and NAT on Vm-Router...'
     $routerResult = Invoke-Command `
         -Session $managementSession `
         -ArgumentList $LocalAdministratorCredential, $configuration, $DnsForwarder `
@@ -574,6 +588,7 @@ exit /b 0
         -Credential $domainControllerLocalCredential `
         -TimeoutMinutes $GuestReadyTimeoutMinutes
 
+    Write-Step 'Promoting the domain controller. Install-ADDSForest takes several minutes...'
     $promotionResult = Invoke-Command `
         -Session $managementSession `
         -ArgumentList $domainControllerName, $domainControllerLocalCredential, $configuration `
@@ -661,6 +676,7 @@ exit /b 0
         }
 
     if ($promotionResult -eq 'RebootRequired') {
+        Write-Step 'Restarting the domain controller after promotion...'
         Invoke-Command -Session $managementSession -ArgumentList $domainControllerName -ScriptBlock {
             param([string]$DomainControllerName)
             Restart-VM -Name $DomainControllerName -Force
@@ -677,6 +693,7 @@ exit /b 0
         -Credential $domainCredential `
         -TimeoutMinutes $GuestReadyTimeoutMinutes
 
+    Write-Step 'Preparing the deployment OU, LCM account, and DNS forwarders...'
     $domainResult = Invoke-Command `
         -Session $managementSession `
         -ArgumentList $domainControllerName, $domainCredential, $LcmCredential, $configuration, $DnsForwarder, $dependencies.PowerShellModules.AsHciADArtifactsPreCreationTool `
@@ -773,6 +790,7 @@ exit /b 0
                 }
         }
 
+    Write-Step 'Pointing the router and Azure Local nodes at the domain controller for DNS...'
     $null = Invoke-Command `
         -Session $managementSession `
         -ArgumentList $LocalAdministratorCredential, $configuration.Domain.DomainControllerIp `
@@ -812,6 +830,7 @@ exit /b 0
     }
 
     $internalSwitchAdapter = Get-NetAdapter -Name 'vEthernet (InternalSwitch)'
+    Write-Step 'Adding host routes to the nested lab networks...'
     foreach ($destinationPrefix in @(
         $configuration.Networks.Provider.Prefix
         $configuration.Networks.Vlan110.Prefix

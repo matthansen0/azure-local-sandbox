@@ -36,6 +36,15 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Write-Step {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Message
+    )
+
+    Write-Information "[$((Get-Date).ToString('HH:mm:ss'))] $Message" -InformationAction Continue
+}
+
 function Invoke-AzureCli {
     param(
         [Parameter(Mandatory)]
@@ -44,6 +53,7 @@ function Invoke-AzureCli {
         [switch]$ParseJson
     )
 
+    Write-Verbose "az $($Arguments -join ' ')"
     $output = & $script:AzureCliPath @Arguments 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Azure CLI failed: $($output -join [Environment]::NewLine)"
@@ -54,6 +64,65 @@ function Invoke-AzureCli {
     }
 
     return $output
+}
+
+function Invoke-AzureCliWithRetry {
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$Arguments,
+
+        [Parameter(Mandatory)]
+        [string]$Activity,
+
+        [int]$MaxAttempts = 20,
+
+        [int]$DelaySeconds = 15
+    )
+
+    for ($attempt = 1; ; $attempt++) {
+        try {
+            return Invoke-AzureCli -Arguments $Arguments
+        }
+        catch {
+            if ($attempt -ge $MaxAttempts) {
+                throw
+            }
+            Write-Step "$Activity failed on attempt $attempt of $MaxAttempts; retrying in $DelaySeconds seconds."
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+}
+
+function Get-DeploymentPrincipal {
+    param(
+        [Parameter(Mandatory)]$Account
+    )
+
+    switch ($Account.user.type) {
+        'user' {
+            $objectId = Invoke-AzureCli `
+                -Arguments @('ad', 'signed-in-user', 'show', '--query', 'id', '--only-show-errors', '--output', 'tsv')
+            $principalType = 'User'
+        }
+        'servicePrincipal' {
+            $objectId = Invoke-AzureCli `
+                -Arguments @('ad', 'sp', 'show', '--id', $Account.user.name, '--query', 'id', '--only-show-errors', '--output', 'tsv')
+            $principalType = 'ServicePrincipal'
+        }
+        default {
+            throw "Unsupported Azure CLI principal type '$($Account.user.type)'. Sign in as a user or service principal."
+        }
+    }
+
+    $objectId = ($objectId -join '').Trim()
+    if (-not $objectId) {
+        throw 'Unable to resolve the signed-in principal used to stage deployment artifacts.'
+    }
+
+    return [pscustomobject]@{
+        ObjectId      = $objectId
+        PrincipalType = $principalType
+    }
 }
 
 function Get-RemoteArtifactHash {
@@ -135,9 +204,11 @@ function Publish-PrivateArtifact {
         [Parameter(Mandatory)]$Snapshot,
         [Parameter(Mandatory)][string]$SubscriptionId,
         [Parameter(Mandatory)][string]$ResourceGroup,
-        [Parameter(Mandatory)][string]$AzureLocation
+        [Parameter(Mandatory)][string]$AzureLocation,
+        [Parameter(Mandatory)]$Principal
     )
 
+    Write-Step "Ensuring resource group $ResourceGroup in $AzureLocation..."
     Invoke-AzureCli `
         -Arguments @(
             'group', 'create',
@@ -158,7 +229,8 @@ function Publish-PrivateArtifact {
     }
     $storageAccountName = "azlsb${suffix}"
 
-    Invoke-AzureCli `
+    Write-Step "Creating artifact storage account $storageAccountName (this can take a minute)..."
+    $storageAccountId = Invoke-AzureCli `
         -Arguments @(
             'storage', 'account', 'create',
             '--name', $storageAccountName,
@@ -169,93 +241,106 @@ function Publish-PrivateArtifact {
             '--https-only', 'true',
             '--min-tls-version', 'TLS1_2',
             '--allow-blob-public-access', 'false',
+            '--allow-shared-key-access', 'false',
+            '--query', 'id',
+            '--only-show-errors',
+            '--output', 'tsv'
+        )
+    $storageAccountId = ($storageAccountId -join '').Trim()
+    if (-not $storageAccountId) {
+        throw 'Unable to resolve the private artifact storage account resource ID.'
+    }
+
+    # Shared key access stays disabled, so the staging principal needs data-plane RBAC.
+    Write-Step "Granting Storage Blob Data Contributor to $($Principal.PrincipalType) $($Principal.ObjectId)..."
+    try {
+        Invoke-AzureCli `
+            -Arguments @(
+                'role', 'assignment', 'create',
+                '--assignee-object-id', $Principal.ObjectId,
+                '--assignee-principal-type', $Principal.PrincipalType,
+                '--role', 'Storage Blob Data Contributor',
+                '--scope', $storageAccountId,
+                '--only-show-errors',
+                '--output', 'none'
+            ) | Out-Null
+    }
+    catch {
+        if ($_.Exception.Message -notmatch 'RoleAssignmentExists') {
+            throw
+        }
+    }
+
+    $containerName = 'deployment-artifacts'
+    Write-Step "Creating container $containerName (waiting for role assignment propagation if needed)..."
+    Invoke-AzureCliWithRetry `
+        -Activity 'Container creation' `
+        -Arguments @(
+            'storage', 'container', 'create',
+            '--name', $containerName,
+            '--account-name', $storageAccountName,
+            '--auth-mode', 'login',
+            '--public-access', 'off',
             '--only-show-errors',
             '--output', 'none'
         ) | Out-Null
 
-    $accountKey = Invoke-AzureCli `
-        -Arguments @(
-            'storage', 'account', 'keys', 'list',
-            '--account-name', $storageAccountName,
-            '--resource-group', $ResourceGroup,
-            '--query', '[0].value',
-            '--only-show-errors',
-            '--output', 'tsv'
-        )
-    $accountKey = ($accountKey -join '').Trim()
-    if (-not $accountKey) {
-        throw 'Unable to retrieve the private artifact storage account key.'
-    }
-
-    $containerName = 'deployment-artifacts'
-    try {
+    foreach ($artifact in @(
+        @{ Name = 'Bootstrap.ps1'; Path = $Snapshot.BootstrapPath }
+        @{ Name = 'source.zip'; Path = $Snapshot.ArchivePath }
+    )) {
+        Write-Step "Uploading $($artifact.Name)..."
         Invoke-AzureCli `
             -Arguments @(
-                'storage', 'container', 'create',
-                '--name', $containerName,
+                'storage', 'blob', 'upload',
+                '--container-name', $containerName,
+                '--name', $artifact.Name,
+                '--file', $artifact.Path,
                 '--account-name', $storageAccountName,
-                '--account-key', $accountKey,
-                '--public-access', 'off',
+                '--auth-mode', 'login',
+                '--overwrite', 'true',
                 '--only-show-errors',
                 '--output', 'none'
             ) | Out-Null
-
-        foreach ($artifact in @(
-            @{ Name = 'Bootstrap.ps1'; Path = $Snapshot.BootstrapPath }
-            @{ Name = 'source.zip'; Path = $Snapshot.ArchivePath }
-        )) {
-            Invoke-AzureCli `
-                -Arguments @(
-                    'storage', 'blob', 'upload',
-                    '--container-name', $containerName,
-                    '--name', $artifact.Name,
-                    '--file', $artifact.Path,
-                    '--account-name', $storageAccountName,
-                    '--account-key', $accountKey,
-                    '--overwrite', 'true',
-                    '--only-show-errors',
-                    '--output', 'none'
-                ) | Out-Null
-        }
-
-        $expiry = (Get-Date).ToUniversalTime().AddHours(24).ToString('yyyy-MM-ddTHH:mmZ')
-        $bootstrapSas = Invoke-AzureCli `
-            -Arguments @(
-                'storage', 'blob', 'generate-sas',
-                '--container-name', $containerName,
-                '--name', 'Bootstrap.ps1',
-                '--account-name', $storageAccountName,
-                '--account-key', $accountKey,
-                '--permissions', 'r',
-                '--expiry', $expiry,
-                '--https-only',
-                '--full-uri',
-                '--only-show-errors',
-                '--output', 'tsv'
-            )
-        $archiveSas = Invoke-AzureCli `
-            -Arguments @(
-                'storage', 'blob', 'generate-sas',
-                '--container-name', $containerName,
-                '--name', 'source.zip',
-                '--account-name', $storageAccountName,
-                '--account-key', $accountKey,
-                '--permissions', 'r',
-                '--expiry', $expiry,
-                '--https-only',
-                '--full-uri',
-                '--only-show-errors',
-                '--output', 'tsv'
-            )
-
-        return [pscustomobject]@{
-            StorageAccountName = $storageAccountName
-            BootstrapUri       = [uri](($bootstrapSas -join '').Trim())
-            ArchiveUri         = [uri](($archiveSas -join '').Trim())
-        }
     }
-    finally {
-        $accountKey = $null
+
+    Write-Step 'Generating read-only user delegation SAS URLs...'
+    $expiry = (Get-Date).ToUniversalTime().AddHours(24).ToString('yyyy-MM-ddTHH:mmZ')
+    $bootstrapSas = Invoke-AzureCli `
+        -Arguments @(
+            'storage', 'blob', 'generate-sas',
+            '--container-name', $containerName,
+            '--name', 'Bootstrap.ps1',
+            '--account-name', $storageAccountName,
+            '--auth-mode', 'login',
+            '--as-user',
+            '--permissions', 'r',
+            '--expiry', $expiry,
+            '--https-only',
+            '--full-uri',
+            '--only-show-errors',
+            '--output', 'tsv'
+        )
+    $archiveSas = Invoke-AzureCli `
+        -Arguments @(
+            'storage', 'blob', 'generate-sas',
+            '--container-name', $containerName,
+            '--name', 'source.zip',
+            '--account-name', $storageAccountName,
+            '--auth-mode', 'login',
+            '--as-user',
+            '--permissions', 'r',
+            '--expiry', $expiry,
+            '--https-only',
+            '--full-uri',
+            '--only-show-errors',
+            '--output', 'tsv'
+        )
+
+    return [pscustomobject]@{
+        StorageAccountName = $storageAccountName
+        BootstrapUri       = [uri](($bootstrapSas -join '').Trim())
+        ArchiveUri         = [uri](($archiveSas -join '').Trim())
     }
 }
 
@@ -265,11 +350,14 @@ if (-not $azureCli) {
 }
 $script:AzureCliPath = $azureCli.Source
 
+Write-Step "Starting $Mode run for deployment $DeploymentName. Run with -Verbose to trace each Azure CLI call."
+
 $dependencies = Import-PowerShellDataFile -LiteralPath (Resolve-Path -LiteralPath $DependenciesPath)
 if ($dependencies.SchemaVersion -ne 1) {
     throw "Unsupported dependency schema '$($dependencies.SchemaVersion)'."
 }
 
+Write-Step "Installing Azure CLI Bicep $($dependencies.Bicep.Version)..."
 Invoke-AzureCli `
     -Arguments @(
         'bicep', 'install',
@@ -289,8 +377,9 @@ if (($BootstrapScriptUri -and -not $SourceArchiveUri) -or ($SourceArchiveUri -an
     throw 'Supply both BootstrapScriptUri and SourceArchiveUri, or neither.'
 }
 if (-not $usesExplicitArtifactUris) {
+    Write-Step 'Packaging the committed source snapshot...'
     $sourceSnapshot = Get-SourceSnapshot -Revision $SourceRevision -RepositoryRoot $repoRoot
-    Write-Information "Source revision: $($sourceSnapshot.Revision)" -InformationAction Continue
+    Write-Step "Source revision: $($sourceSnapshot.Revision)"
 }
 
 if (-not $env:AZURE_LOCAL_SANDBOX_ADMIN_PASSWORD) {
@@ -310,7 +399,7 @@ if (-not (Test-Path -LiteralPath $templateFile)) {
 $account = Invoke-AzureCli `
     -Arguments @('account', 'show', '--only-show-errors', '--output', 'json') `
     -ParseJson
-Write-Information "Subscription: $($account.name) ($($account.id))" -InformationAction Continue
+Write-Step "Subscription: $($account.name) ($($account.id))"
 
 $providerNamespaces = @(
     'Microsoft.Attestation'
@@ -332,13 +421,14 @@ $providerNamespaces = @(
 )
 
 if ($Mode -eq 'Deploy') {
+    Write-Step "Checking $($providerNamespaces.Count) resource provider registrations..."
     foreach ($providerNamespace in $providerNamespaces) {
         $provider = Invoke-AzureCli `
             -Arguments @('provider', 'show', '--namespace', $providerNamespace, '--output', 'json') `
             -ParseJson
 
         if ($provider.registrationState -ne 'Registered') {
-            Write-Information "Registering $providerNamespace..." -InformationAction Continue
+            Write-Step "Registering $providerNamespace (this can take several minutes)..."
             Invoke-AzureCli `
                 -Arguments @(
                     'provider', 'register',
@@ -348,10 +438,14 @@ if ($Mode -eq 'Deploy') {
                     '--output', 'none'
                 ) | Out-Null
         }
+        else {
+            Write-Step "$providerNamespace is registered."
+        }
     }
 }
 
 if (-not $HciResourceProviderObjectId) {
+    Write-Step 'Resolving the Azure Local resource provider service principal...'
     $HciResourceProviderObjectId = Invoke-AzureCli `
         -Arguments @(
             'ad', 'sp', 'list',
@@ -371,6 +465,7 @@ if ($sourceSnapshot) {
     $env:AZURE_LOCAL_SANDBOX_SOURCE_SHA256 = $sourceSnapshot.ArchiveHash
 }
 else {
+    Write-Step 'Hashing the supplied remote artifacts...'
     $env:AZURE_LOCAL_SANDBOX_BOOTSTRAP_SHA256 = Get-RemoteArtifactHash `
         -Uri $BootstrapScriptUri `
         -Name 'BootstrapScriptUri'
@@ -379,6 +474,7 @@ else {
         -Name 'SourceArchiveUri'
 }
 
+Write-Step "Checking $VmSize availability in $Location..."
 $availableSkus = @(
     Invoke-AzureCli `
         -Arguments @(
@@ -401,6 +497,7 @@ if (-not $availableSku) {
 }
 
 if (-not $HostImageVersion) {
+    Write-Step 'Resolving the latest Windows Server marketplace image version...'
     $image = $dependencies.OuterHostImage
     $HostImageVersion = Invoke-AzureCli `
         -Arguments @(
@@ -420,19 +517,21 @@ if (-not $HostImageVersion -or $HostImageVersion -eq 'latest') {
     throw 'An exact Windows Server marketplace image version could not be resolved.'
 }
 $env:AZURE_LOCAL_SANDBOX_HOST_IMAGE_VERSION = $HostImageVersion
-Write-Information "Host image version: $HostImageVersion" -InformationAction Continue
+Write-Step "Host image version: $HostImageVersion"
 
 try {
     if (-not $usesExplicitArtifactUris) {
         if ($Mode -eq 'Deploy') {
+            Write-Step 'Staging private deployment artifacts...'
             $privateArtifactStage = Publish-PrivateArtifact `
                 -Snapshot $sourceSnapshot `
                 -SubscriptionId $account.id `
                 -ResourceGroup $ResourceGroupName `
-                -AzureLocation $Location
+                -AzureLocation $Location `
+                -Principal (Get-DeploymentPrincipal -Account $account)
             $BootstrapScriptUri = $privateArtifactStage.BootstrapUri
             $SourceArchiveUri = $privateArtifactStage.ArchiveUri
-            Write-Information "Staged private deployment artifacts in $($privateArtifactStage.StorageAccountName)." -InformationAction Continue
+            Write-Step "Staged private deployment artifacts in $($privateArtifactStage.StorageAccountName)."
         }
         else {
             $BootstrapScriptUri = [uri]'https://validation.invalid/Bootstrap.ps1'
@@ -456,25 +555,27 @@ try {
         '--only-show-errors'
     )
 
-    Write-Information 'Validating subscription deployment...' -InformationAction Continue
+    Write-Step 'Validating subscription deployment...'
     Invoke-AzureCli `
         -Arguments (@('deployment', 'sub', 'validate') + $commonArguments + @('--output', 'none')) |
         Out-Null
 
     switch ($Mode) {
         'Validate' {
-            Write-Information 'Deployment validation succeeded.' -InformationAction Continue
+            Write-Step 'Deployment validation succeeded.'
         }
         'WhatIf' {
+            Write-Step 'Running what-if analysis...'
             Invoke-AzureCli `
                 -Arguments (@('deployment', 'sub', 'what-if') + $commonArguments + @('--output', 'jsonc'))
         }
         'Deploy' {
-            Write-Information 'Creating Azure Local sandbox host...' -InformationAction Continue
+            Write-Step 'Creating Azure Local sandbox host. The template takes roughly 20-30 minutes; track progress in the portal deployment blade.'
             $deployment = Invoke-AzureCli `
                 -Arguments (@('deployment', 'sub', 'create') + $commonArguments + @('--output', 'json')) `
                 -ParseJson
 
+            Write-Step 'Deployment completed.'
             $deployment.properties.outputs | ConvertTo-Json -Depth 10
         }
     }
@@ -484,7 +585,7 @@ finally {
         Remove-Item -LiteralPath $sourceSnapshot.Root -Recurse -Force -ErrorAction SilentlyContinue
     }
     if ($privateArtifactStage) {
-        Write-Information "Removing temporary artifact storage account $($privateArtifactStage.StorageAccountName)..." -InformationAction Continue
+        Write-Step "Removing temporary artifact storage account $($privateArtifactStage.StorageAccountName)..."
         Invoke-AzureCli `
             -Arguments @(
                 'storage', 'account', 'delete',

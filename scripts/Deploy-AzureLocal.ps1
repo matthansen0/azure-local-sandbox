@@ -41,6 +41,15 @@ if (-not $GenerateParametersOnly) {
     }
 }
 
+function Write-Step {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Message
+    )
+
+    Write-Information "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] $Message" -InformationAction Continue
+}
+
 function Install-RequiredAzModule {
     param(
         [Parameter(Mandatory)][string]$Name,
@@ -51,6 +60,7 @@ function Install-RequiredAzModule {
         return
     }
 
+    Write-Step "Installing PowerShell module $Name $Version from PSGallery..."
     if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
         Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
     }
@@ -302,6 +312,7 @@ Import-Module `
     -RequiredVersion $dependencies.PowerShellModules.AzResources.Version `
     -Force
 
+Write-Step 'Signing in to Azure with the host managed identity...'
 $null = Connect-AzAccount `
     -Identity `
     -Tenant $context.tenantId `
@@ -311,6 +322,7 @@ New-Item -Path $ArtifactsPath -ItemType Directory -Force | Out-Null
 $templatePath = Join-Path $ArtifactsPath 'azure-local-create-cluster.json'
 $templateDownloadPath = "${templatePath}.download"
 try {
+    Write-Step 'Downloading the pinned Azure Local Quickstart template...'
     Invoke-WebRequest -Uri $TemplateUri -OutFile $templateDownloadPath -UseBasicParsing
     $template = Get-Content -LiteralPath $templateDownloadPath -Raw | ConvertFrom-Json
 
@@ -373,6 +385,7 @@ else {
     'azure-local-deploy'
 }
 
+Write-Step "Submitting deployment '$deploymentName' in $($context.resourceGroupName). Azure Local $Mode runs for a few hours; follow the deployment in the portal."
 $deployment = New-AzResourceGroupDeployment `
     -Name $deploymentName `
     -ResourceGroupName $context.resourceGroupName `
@@ -380,6 +393,8 @@ $deployment = New-AzResourceGroupDeployment `
     -TemplateParameterObject $deploymentParameters `
     -Mode Incremental `
     -ErrorAction Stop
+
+Write-Step "Deployment '$deploymentName' finished with state '$($deployment.ProvisioningState)'."
 
 if ($deployment.ProvisioningState -ne 'Succeeded') {
     throw "Azure Local $Mode deployment finished in state '$($deployment.ProvisioningState)'."

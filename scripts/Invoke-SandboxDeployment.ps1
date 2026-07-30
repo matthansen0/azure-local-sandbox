@@ -125,8 +125,10 @@ function Invoke-Stage {
     )
 
     Write-Information "[$(Get-Date -Format o)] Starting stage: $Name" -InformationAction Continue
+    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
     & $Action
-    Write-Information "[$(Get-Date -Format o)] Completed stage: $Name" -InformationAction Continue
+    $stopwatch.Stop()
+    Write-Information "[$(Get-Date -Format o)] Completed stage: $Name in $($stopwatch.Elapsed.ToString('hh\:mm\:ss'))" -InformationAction Continue
 }
 
 if ($localCredential.Password.Length -lt 14) {

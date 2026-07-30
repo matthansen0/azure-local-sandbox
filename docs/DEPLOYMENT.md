@@ -27,7 +27,7 @@ The deployment registers the required Azure resource providers.
 - An authenticated Azure CLI session targeting the intended subscription.
 - A clean Git commit containing the exact source to deploy.
 
-The deployment script packages the commit, places it temporarily in private Azure Storage, and supplies read-only SAS URLs to the VM extension. The staging account is removed after deployment.
+The deployment script packages the commit, places it temporarily in private Azure Storage, and supplies read-only SAS URLs to the VM extension. The staging account disables shared key access; the script grants the signed-in principal `Storage Blob Data Contributor` on the account and uses Microsoft Entra ID for uploads and a user delegation SAS. The staging account is removed after deployment.
 
 ### Media
 

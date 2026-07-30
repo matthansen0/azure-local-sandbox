@@ -39,6 +39,15 @@ $SourcePath = Join-Path $SandboxRoot 'Source'
 $MediaPath = Join-Path $SandboxRoot 'Media'
 $SetupLauncherPath = Join-Path $ScriptsPath 'Launch-SandboxSetup.ps1'
 
+function Write-Step {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Message
+    )
+
+    Write-Information "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] $Message" -InformationAction Continue
+}
+
 function Initialize-SetupLauncher {
     New-Item -Path $MediaPath -ItemType Directory -Force | Out-Null
 
@@ -119,11 +128,14 @@ function Initialize-SandboxSource {
     Remove-Item -LiteralPath $extractPath -Recurse -Force -ErrorAction SilentlyContinue
 
     try {
+        Write-Step "Downloading the sandbox source archive from $($sourceArchive.Host)..."
         Invoke-WebRequest -Uri $sourceArchive -OutFile $downloadPath -UseBasicParsing
+        Write-Step 'Verifying the source archive hash...'
         $downloadHash = (Get-FileHash -LiteralPath $downloadPath -Algorithm SHA256).Hash
         if ($downloadHash -ne $sourceArchiveSha256) {
             throw "Source archive SHA-256 mismatch. Expected $sourceArchiveSha256; received $downloadHash."
         }
+        Write-Step 'Expanding the source archive...'
         Expand-Archive -LiteralPath $downloadPath -DestinationPath $extractPath -Force
 
         $archiveRoot = Get-ChildItem -LiteralPath $extractPath -Directory |
@@ -199,6 +211,8 @@ function Write-DeploymentState {
         message   = $Message
         updatedAt = (Get-Date).ToUniversalTime().ToString('o')
     } | ConvertTo-Json | Set-Content -LiteralPath $StateFile -Encoding UTF8
+
+    Write-Step "${Phase}: $Message"
 }
 
 function Register-ContinuationTask {
@@ -349,8 +363,11 @@ function Invoke-PostRebootConfiguration {
     }
 
     Initialize-NestedVmStorage
+    Write-Step 'Nested VM storage volume V: is ready.'
     Initialize-HostNetworking
+    Write-Step 'Internal switches and NAT are configured.'
     Initialize-SetupLauncher
+    Write-Step 'Desktop setup launcher is installed.'
 
     Unregister-ScheduledTask -TaskName $ContinuationTaskName -Confirm:$false -ErrorAction SilentlyContinue
     Write-DeploymentState -Phase 'HostReady' -Message 'Hyper-V host storage and networking are ready for nested VM creation.'
@@ -368,6 +385,7 @@ try {
         -ContextHciResourceProviderObjectId $HciResourceProviderObjectId
     Start-Transcript -Path (Join-Path $LogsPath 'Bootstrap.log') -Append | Out-Null
     $transcriptStarted = $true
+    Write-Step "Bootstrap started (continuation: $([bool]$Continue)). Logging to $(Join-Path $LogsPath 'Bootstrap.log')."
     Initialize-SandboxSource `
         -ArchiveUriBase64 $SourceArchiveUriBase64 `
         -ArchiveSha256Base64 $SourceArchiveSha256Base64 `
@@ -385,6 +403,7 @@ try {
     Write-DeploymentState -Phase 'InstallingHyperV' -Message 'Installing the Hyper-V role and management tools.'
     Register-ContinuationTask
 
+    Write-Step 'Install-WindowsFeature Hyper-V is running; this takes several minutes.'
     $featureResult = Install-WindowsFeature `
         -Name 'Hyper-V' `
         -IncludeAllSubFeature `

@@ -13,6 +13,15 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Write-Step {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Message
+    )
+
+    Write-Information "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] $Message" -InformationAction Continue
+}
+
 function ConvertTo-UnattendPassword {
     param(
         [Parameter(Mandatory)]
@@ -305,6 +314,7 @@ if ($configuration.SchemaVersion -ne 2) {
 }
 
 $results = foreach ($virtualMachineConfiguration in @($configuration.VMs)) {
+    Write-Step "Specializing the OS disk for $($virtualMachineConfiguration.Name)..."
     $virtualMachine = Get-VM -Name $virtualMachineConfiguration.Name -ErrorAction Stop
     if ($virtualMachine.State -ne 'Off') {
         throw "VM '$($virtualMachine.Name)' must be off before its OS disk can be specialized."
@@ -320,6 +330,7 @@ $results = foreach ($virtualMachineConfiguration in @($configuration.VMs)) {
     foreach ($featureName in @($virtualMachineConfiguration.OfflineFeatures)) {
         $feature = Get-WindowsFeature -Vhd $operatingSystemDisk.Path -Name $featureName
         if ($feature.InstallState -ne 'Installed') {
+            Write-Step "Installing offline feature $featureName into $($virtualMachine.Name)..."
             Install-WindowsFeature `
                 -Vhd $operatingSystemDisk.Path `
                 -Name $featureName `
@@ -353,6 +364,7 @@ if (-not $managementDataDisk) {
     throw 'AzLMGMT data disk was not found.'
 }
 
+Write-Step 'Copying the Windows Server parent image into the AzLMGMT data disk. This takes several minutes...'
 $managementParentImage = Initialize-ManagementImageStore `
     -VirtualHardDiskPath $managementDataDisk.Path `
     -SourceImagePath 'V:\VHDs\WindowsServer2025.vhdx'

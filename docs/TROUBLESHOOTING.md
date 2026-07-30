@@ -107,6 +107,26 @@ Register `Microsoft.AzureStackHCI`, then retry, or provide the tenant-specific o
 
 The resource-provider application ID is `1412d89f-b8a8-4111-b4fd-e82905cbd85d`.
 
+### Public IP creation fails with SubscriptionNotRegisteredForFeature
+
+The `localbox-network` module fails with:
+
+```text
+SubscriptionNotRegisteredForFeature ... is not registered for feature
+Microsoft.Network/AllowBringYourOwnPublicIpAddress
+```
+
+The template requests ordinary Azure-allocated Standard public IPs, so this is a subscription restriction rather than a template problem. `Deploy.ps1 -Mode Deploy` registers that feature during preflight, waits for the `Registered` state, and re-registers `Microsoft.Network` so the flag propagates. Rerun the deployment.
+
+Registration requires subscription-level rights. If preflight reports that it cannot register the feature, have a subscription owner run:
+
+```powershell
+az feature register --namespace Microsoft.Network --name AllowBringYourOwnPublicIpAddress
+az provider register --namespace Microsoft.Network
+```
+
+Passing `deployBastion = false` in `infra/main.bicepparam` is not a workaround. It removes only the Bastion public IP; the NAT Gateway still requires one for outbound access.
+
 ### Arc registration waits or times out
 
 Check from each Azure Local node:

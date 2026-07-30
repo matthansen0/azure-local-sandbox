@@ -17,7 +17,7 @@ Return to the [project overview](../README.md) or see [troubleshooting](TROUBLES
 - Policies that allow VM extensions, managed identities, Key Vault, Storage, Hybrid Compute, Azure Local, and role assignments.
 - Direct outbound HTTPS access. Proxy and Azure Arc Gateway modes are not implemented.
 
-The deployment registers the required Azure resource providers.
+The deployment registers the required Azure resource providers, plus the `Microsoft.Network/AllowBringYourOwnPublicIpAddress` subscription feature that some subscriptions require before any public IP can be allocated.
 
 ### Deployment workstation
 

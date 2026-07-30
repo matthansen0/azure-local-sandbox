@@ -66,6 +66,66 @@ function Invoke-AzureCli {
     return $output
 }
 
+function Register-SubscriptionFeature {
+    param(
+        [Parameter(Mandatory)][string]$Namespace,
+        [Parameter(Mandatory)][string]$Name,
+        [timespan]$Timeout = [timespan]::FromMinutes(15)
+    )
+
+    $state = (Invoke-AzureCli -Arguments @(
+            'feature', 'show',
+            '--namespace', $Namespace,
+            '--name', $Name,
+            '--query', 'properties.state',
+            '--only-show-errors',
+            '--output', 'tsv'
+        ) -join '').Trim()
+
+    if ($state -eq 'Registered') {
+        Write-Step "$Namespace/$Name is registered."
+        return $false
+    }
+
+    Write-Step "Registering feature $Namespace/$Name (this can take several minutes)..."
+    if ($state -ne 'Registering') {
+        try {
+            Invoke-AzureCli -Arguments @(
+                'feature', 'register',
+                '--namespace', $Namespace,
+                '--name', $Name,
+                '--only-show-errors',
+                '--output', 'none'
+            ) | Out-Null
+        }
+        catch {
+            throw "Unable to register feature $Namespace/$Name. Subscription-level rights are required. $($_.Exception.Message)"
+        }
+    }
+
+    $deadline = (Get-Date).Add($Timeout)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 30
+        $state = (Invoke-AzureCli -Arguments @(
+                'feature', 'show',
+                '--namespace', $Namespace,
+                '--name', $Name,
+                '--query', 'properties.state',
+                '--only-show-errors',
+                '--output', 'tsv'
+            ) -join '').Trim()
+
+        if ($state -eq 'Registered') {
+            Write-Step "$Namespace/$Name is registered."
+            return $true
+        }
+
+        Write-Step "$Namespace/$Name is $state..."
+    }
+
+    throw "Feature $Namespace/$Name did not reach the Registered state within $($Timeout.TotalMinutes) minutes. Rerun once the portal reports it as registered."
+}
+
 function Get-RemoteArtifactHash {
     param(
         [Parameter(Mandatory)][uri]$Uri,
@@ -215,6 +275,11 @@ $providerNamespaces = @(
     'Microsoft.Storage'
 )
 
+# Some subscriptions only allocate public IPs through this feature, which the NAT Gateway and Bastion both need.
+$subscriptionFeatures = @(
+    [pscustomobject]@{ Namespace = 'Microsoft.Network'; Name = 'AllowBringYourOwnPublicIpAddress' }
+)
+
 if ($Mode -eq 'Deploy') {
     Write-Step "Checking $($providerNamespaces.Count) resource provider registrations..."
     foreach ($providerNamespace in $providerNamespaces) {
@@ -236,6 +301,27 @@ if ($Mode -eq 'Deploy') {
         else {
             Write-Step "$providerNamespace is registered."
         }
+    }
+
+    Write-Step "Checking $($subscriptionFeatures.Count) subscription feature registration(s)..."
+    $featureRegistrationChanged = $false
+    foreach ($feature in $subscriptionFeatures) {
+        if (Register-SubscriptionFeature -Namespace $feature.Namespace -Name $feature.Name) {
+            $featureRegistrationChanged = $true
+        }
+    }
+
+    if ($featureRegistrationChanged) {
+        # Feature flags only take effect after the owning provider re-reads them.
+        Write-Step 'Propagating the new feature registrations to Microsoft.Network...'
+        Invoke-AzureCli `
+            -Arguments @(
+                'provider', 'register',
+                '--namespace', 'Microsoft.Network',
+                '--wait',
+                '--only-show-errors',
+                '--output', 'none'
+            ) | Out-Null
     }
 }
 

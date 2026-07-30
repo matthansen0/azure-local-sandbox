@@ -84,7 +84,12 @@ function Get-IsoInstallImage {
             throw "ISO '$resolvedIsoPath' does not contain sources\install.wim or sources\install.esd."
         }
 
-        $images = @(Get-WindowsImage -ImagePath $installImagePath)
+        # Only the -Index form returns Version; the list form omits it and strict mode then throws.
+        $images = @(
+            Get-WindowsImage -ImagePath $installImagePath | ForEach-Object {
+                Get-WindowsImage -ImagePath $installImagePath -Index $_.ImageIndex
+            }
+        )
         return [pscustomobject]@{
             IsoPath          = $resolvedIsoPath
             InstallImagePath = $installImagePath

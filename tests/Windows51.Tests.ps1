@@ -158,4 +158,61 @@ Describe 'Host script execution under Windows PowerShell' -Skip:([System.Environ
         @($installImage.Images).Count | Should -Be 2
         @($installImage.Images)[0].Version | Should -Not -BeNullOrEmpty
     }
+
+    It 'restarts the router until the RemoteAccess cmdlet is available' {
+        Set-StrictMode -Version Latest
+
+        $managementScript = Join-Path $repoRoot 'scripts\Initialize-ManagementPlane.ps1'
+        $managementAst = [System.Management.Automation.Language.Parser]::ParseFile(
+            $managementScript,
+            [ref]$null,
+            [ref]$null
+        )
+        $featureScriptAst = @(
+            $managementAst.FindAll({
+                    param($node)
+                    $node -is [System.Management.Automation.Language.ScriptBlockAst] -and
+                    $node.Extent.Text -match 'Install-WindowsFeature' -and
+                    $node.Extent.Text -match 'Get-Command -Name Install-RemoteAccess'
+                }, $true) |
+                Sort-Object { $_.Extent.Text.Length }
+        )[0]
+        $featureScript = $featureScriptAst.GetScriptBlock()
+
+        function Invoke-FeatureInstallSimulation {
+            param(
+                [string]$FeatureRestartNeeded,
+                [bool]$RemoteAccessAvailable
+            )
+
+            function Install-WindowsFeature {
+                [CmdletBinding()]
+                param([string[]]$Name, [switch]$IncludeManagementTools)
+                [pscustomobject]@{ RestartNeeded = $FeatureRestartNeeded }
+            }
+
+            function Get-WindowsFeature {
+                [CmdletBinding()]
+                param([string]$Name)
+                [pscustomobject]@{ InstallState = 'Installed' }
+            }
+
+            function Get-Command {
+                [CmdletBinding()]
+                param([string]$Name)
+                if ($RemoteAccessAvailable) {
+                    [pscustomobject]@{ Name = $Name }
+                }
+            }
+
+            & $featureScript
+        }
+
+        (Invoke-FeatureInstallSimulation -FeatureRestartNeeded Yes -RemoteAccessAvailable $true).RestartNeeded |
+            Should -Be 'Yes'
+        (Invoke-FeatureInstallSimulation -FeatureRestartNeeded No -RemoteAccessAvailable $false).RestartNeeded |
+            Should -Be 'Yes'
+        (Invoke-FeatureInstallSimulation -FeatureRestartNeeded No -RemoteAccessAvailable $true).RestartNeeded |
+            Should -Be 'No'
+    }
 }

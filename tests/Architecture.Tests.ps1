@@ -255,3 +255,27 @@ Describe 'Windows PowerShell 5.1 compatibility' {
                 ForEach-Object { "$($_.Filename):$($_.LineNumber)" }) | Should -BeNullOrEmpty
     }
 }
+
+Describe 'Management plane orchestration contract' {
+    It 'restarts the router when feature installation requires it before configuring RRAS' {
+        $managementPlaneSource = Get-Content `
+            (Join-Path $repoRoot 'scripts/Initialize-ManagementPlane.ps1') `
+            -Raw
+
+        $featureInstallIndex = $managementPlaneSource.IndexOf('$routerFeatureResult = Invoke-Command')
+        $restartBoundaryIndex = $managementPlaneSource.IndexOf("if (`$routerFeatureResult.RestartNeeded -eq 'Yes')")
+        $readinessWaitIndex = $managementPlaneSource.IndexOf(
+            'Wait-NestedPowerShellDirect',
+            $restartBoundaryIndex
+        )
+        $rrasConfigurationIndex = $managementPlaneSource.IndexOf('Install-RemoteAccess -VpnType RoutingOnly')
+
+        $featureInstallIndex | Should -BeGreaterOrEqual 0
+        $restartBoundaryIndex | Should -BeGreaterThan $featureInstallIndex
+        $readinessWaitIndex | Should -BeGreaterThan $restartBoundaryIndex
+        $rrasConfigurationIndex | Should -BeGreaterThan $restartBoundaryIndex
+        $rrasConfigurationIndex | Should -BeGreaterThan $readinessWaitIndex
+        $managementPlaneSource | Should -Match "Restart-VM -Name 'Vm-Router' -Force"
+        $managementPlaneSource | Should -Match 'Get-Command -Name Install-RemoteAccess'
+    }
+}

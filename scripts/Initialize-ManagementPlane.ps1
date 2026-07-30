@@ -443,6 +443,49 @@ exit /b 0
         -Credential $LocalAdministratorCredential `
         -TimeoutMinutes $GuestReadyTimeoutMinutes
 
+    Write-Step 'Installing routing features on Vm-Router...'
+    $routerFeatureResult = Invoke-Command `
+        -Session $managementSession `
+        -ArgumentList $LocalAdministratorCredential `
+        -ScriptBlock {
+            param([PSCredential]$Credential)
+
+            Invoke-Command `
+                -VMName 'Vm-Router' `
+                -Credential $Credential `
+                -ScriptBlock {
+                    $featureResult = Install-WindowsFeature `
+                        -Name RemoteAccess, Routing `
+                        -IncludeManagementTools
+
+                    foreach ($featureName in @('RemoteAccess', 'Routing')) {
+                        if ((Get-WindowsFeature -Name $featureName).InstallState -ne 'Installed') {
+                            throw "Windows feature '$featureName' did not install successfully."
+                        }
+                    }
+
+                    $restartNeeded =
+                        [string]$featureResult.RestartNeeded -eq 'Yes' -or
+                        -not (Get-Command -Name Install-RemoteAccess -ErrorAction SilentlyContinue)
+
+                    [pscustomobject]@{
+                        RestartNeeded = if ($restartNeeded) { 'Yes' } else { 'No' }
+                    }
+                }
+        }
+
+    if ($routerFeatureResult.RestartNeeded -eq 'Yes') {
+        Write-Step 'Restarting Vm-Router to finish routing feature installation...'
+        Invoke-Command -Session $managementSession -ScriptBlock {
+            Restart-VM -Name 'Vm-Router' -Force
+        }
+        Wait-NestedPowerShellDirect `
+            -ManagementSession $managementSession `
+            -VirtualMachineName 'Vm-Router' `
+            -Credential $LocalAdministratorCredential `
+            -TimeoutMinutes $GuestReadyTimeoutMinutes
+    }
+
     Write-Step 'Configuring routing and NAT on Vm-Router...'
     $routerResult = Invoke-Command `
         -Session $managementSession `
@@ -544,7 +587,6 @@ exit /b 0
                         -DefaultGateway $Configuration.Networks.InnerNat.Gateway `
                         -DnsServers @($DnsForwarder)
 
-                    Install-WindowsFeature -Name RemoteAccess, Routing -IncludeManagementTools | Out-Null
                     Set-ItemProperty `
                         -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters' `
                         -Name 'IPEnableRouter' `

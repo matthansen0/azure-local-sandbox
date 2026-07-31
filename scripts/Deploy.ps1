@@ -149,6 +149,68 @@ function Get-RemoteArtifactHash {
     }
 }
 
+function Test-MonitoringContainment {
+    param(
+        [Parameter(Mandatory)][string]$VirtualMachineId
+    )
+
+    # A subscription or management group DeployIfNotExists assignment can attach its own agent and data
+    # collection rule to a brand new VM, which bills this lab's event log ingestion to a workspace the
+    # sandbox does not own. Surface that here rather than on an invoice.
+    $sandboxScope = ($VirtualMachineId -split '/providers/')[0]
+
+    $associationResponse = Invoke-AzureCli `
+        -Arguments @(
+            'rest',
+            '--method', 'get',
+            '--url', "https://management.azure.com$VirtualMachineId/providers/Microsoft.Insights/dataCollectionRuleAssociations?api-version=2023-03-11",
+            '--only-show-errors',
+            '--output', 'json'
+        ) `
+        -ParseJson
+
+    $associations = @()
+    if ($associationResponse.PSObject.Properties['value']) {
+        $associations = @($associationResponse.value)
+    }
+
+    $foreignRuleIds = @(
+        $associations | ForEach-Object {
+            # Endpoint-only associations carry no rule ID, so read the property defensively under StrictMode.
+            $ruleProperty = $_.properties.PSObject.Properties['dataCollectionRuleId']
+            if ($ruleProperty -and $ruleProperty.Value -and $ruleProperty.Value -notlike "$sandboxScope/*") {
+                $ruleProperty.Value
+            }
+        }
+    )
+
+    $installedExtensions = @(
+        Invoke-AzureCli `
+            -Arguments @(
+                'vm', 'extension', 'list',
+                '--ids', $VirtualMachineId,
+                '--query', '[].name',
+                '--only-show-errors',
+                '--output', 'json'
+            ) `
+            -ParseJson
+    )
+    $legacyAgents = @($installedExtensions | Where-Object { $_ -eq 'MicrosoftMonitoringAgent' })
+
+    if ($foreignRuleIds.Count -eq 0 -and $legacyAgents.Count -eq 0) {
+        Write-Step 'Monitoring containment verified: the host reports only sandbox-owned data collection rules.'
+        return
+    }
+
+    foreach ($foreignRuleId in $foreignRuleIds) {
+        Write-Warning "The host is associated with a data collection rule outside the sandbox resource group: $foreignRuleId. Its ingestion is billed to whichever workspace that rule targets, not to the sandbox workspace."
+    }
+    if ($legacyAgents.Count -gt 0) {
+        Write-Warning 'The legacy Log Analytics agent (MicrosoftMonitoringAgent) is installed on the host. Microsoft Defender for Cloud auto-provisioning installs it and can stream the full Security event log off this lab.'
+    }
+    Write-Warning 'Identify the owner with "az policy assignment list --disable-scope-strict-match" and "az security workspace-setting list", then exempt the sandbox resource group.'
+}
+
 function Resolve-PublishedSource {
     param(
         [string]$Revision,
@@ -264,6 +326,7 @@ $providerNamespaces = @(
     'Microsoft.Authorization'
     'Microsoft.AzureStackHCI'
     'Microsoft.Compute'
+    'Microsoft.EdgeMarketplace'
     'Microsoft.ExtendedLocation'
     'Microsoft.GuestConfiguration'
     'Microsoft.HybridCompute'
@@ -274,6 +337,7 @@ $providerNamespaces = @(
     'Microsoft.Kubernetes'
     'Microsoft.KubernetesConfiguration'
     'Microsoft.Network'
+    'Microsoft.OperationalInsights'
     'Microsoft.ResourceConnector'
     'Microsoft.Storage'
 )
@@ -487,5 +551,6 @@ switch ($Mode) {
 
         Write-Step 'Deployment completed.'
         $deployment.properties.outputs | ConvertTo-Json -Depth 10
+        Test-MonitoringContainment -VirtualMachineId $deployment.properties.outputs.hostVirtualMachineId.value
     }
 }

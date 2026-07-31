@@ -20,6 +20,7 @@ workloads.
 - `AzLHOST1` and `AzLHOST2` as nested Azure Local nodes.
 - `AzLMGMT` as a nested Hyper-V host running `JumpstartDC` and `Vm-Router`.
 - Active Directory, DNS, routing, Azure Arc registration, and Azure Local cloud deployment.
+- A sandbox-owned Log Analytics workspace with a capped daily ingestion budget.
 - A guided desktop setup for selecting licensed ISO media and resuming failed stages.
 
 ## Prerequisites
@@ -73,6 +74,7 @@ After deployment:
 2. Download the Windows Server 2025 and Azure Local ISOs inside the VM.
 3. Double-click **Azure Local Sandbox Setup** on the desktop.
 4. Select both ISOs, choose their image indexes, and enter the requested credentials.
+   The Windows Server index must be a `(Desktop Experience)` image.
 5. Choose **Validate** first.
 6. After validation succeeds, launch setup again and choose **Deploy**.
 

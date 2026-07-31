@@ -196,6 +196,80 @@ Describe 'Credential and artifact contract' {
     }
 }
 
+Describe 'Monitoring containment contract' {
+    BeforeAll {
+        $monitoringTemplate = Get-Content (Join-Path $repoRoot 'infra/modules/monitoring.bicep') -Raw
+        $mainTemplate = Get-Content (Join-Path $repoRoot 'infra/main.bicep') -Raw
+        $parameterText = Get-Content (Join-Path $repoRoot 'infra/main.bicepparam') -Raw
+        $deploymentWrapper = Get-Content (Join-Path $repoRoot 'scripts/Deploy.ps1') -Raw
+        $monitoringModule = [regex]::Match(
+            $mainTemplate,
+            "module monitoring 'modules/monitoring\.bicep' = if \(deployMonitoring\) \{(?<body>.*?)\r?\n\}",
+            'Singleline'
+        ).Groups['body'].Value
+    }
+
+    It 'sends host telemetry only to the workspace this template creates' {
+        # The sandbox must never be able to name an external workspace, which is exactly how a
+        # subscription-wide monitoring policy ends up billing lab ingestion somewhere else.
+        $destinations = @(
+            [regex]::Matches($monitoringTemplate, 'workspaceResourceId:\s*(?<target>[^\r\n]+)') |
+                ForEach-Object { $_.Groups['target'].Value.Trim() }
+        )
+        $destinations | Should -Be @('workspace.id')
+        $monitoringTemplate | Should -Match "resource workspace 'Microsoft\.OperationalInsights/workspaces@"
+        $monitoringTemplate | Should -Not -Match '(?i)param\s+\w*workspace\w*\s+string'
+    }
+
+    It 'caps daily ingestion and keeps retention inside the included allowance' {
+        $monitoringTemplate | Should -Match 'dailyQuotaGb: dailyQuotaGb'
+        $mainTemplate | Should -Match 'param logAnalyticsDailyQuotaGb int'
+        $parameterText | Should -Match 'param logAnalyticsDailyQuotaGb = \d+'
+        $parameterText | Should -Match 'param logAnalyticsRetentionInDays = 30'
+    }
+
+    It 'never collects the Security channel or Information level events' {
+        $monitoringTemplate |
+            Should -Match "eventLogSeverityFilter = '\*\[System\[\(Level=1 or Level=2 or Level=3\)\]\]'"
+
+        $xPathBlock = [regex]::Match(
+            $monitoringTemplate,
+            'xPathQueries:\s*\[(?<queries>[^\]]*)\]'
+        ).Groups['queries'].Value
+        $queries = @($xPathBlock -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+
+        $queries.Count | Should -BeGreaterThan 0
+        foreach ($query in $queries) {
+            $query | Should -Match '!\$\{eventLogSeverityFilter\}''$'
+            $query | Should -Not -Match "(?i)^'Security!"
+        }
+    }
+
+    It 'onboards the host with the Azure Monitor agent and a sandbox-owned association' {
+        $monitoringTemplate | Should -Match "publisher: 'Microsoft\.Azure\.Monitor'"
+        $monitoringTemplate | Should -Match "type: 'AzureMonitorWindowsAgent'"
+        $monitoringTemplate | Should -Match 'dataCollectionRuleId: dataCollectionRule\.id'
+        $monitoringTemplate | Should -Match 'scope: virtualMachine'
+    }
+
+    It 'keeps every monitoring resource in the sandbox region and resource group' {
+        $monitoringTemplate | Should -Not -Match "location: '"
+        $monitoringModule | Should -Not -BeNullOrEmpty
+        $monitoringModule | Should -Match 'scope: sandboxResourceGroup'
+        $monitoringModule | Should -Match 'location: location'
+        # Consuming the host output sequences the agent after the bootstrap Custom Script Extension.
+        $monitoringModule | Should -Match 'virtualMachineName: host\.outputs\.virtualMachineName'
+    }
+
+    It 'reports monitoring attached from outside the sandbox after deployment' {
+        $deploymentWrapper | Should -Match "'Microsoft\.OperationalInsights'"
+        $deploymentWrapper | Should -Match 'function Test-MonitoringContainment'
+        $deploymentWrapper | Should -Match 'dataCollectionRuleAssociations\?api-version='
+        $deploymentWrapper | Should -Match 'MicrosoftMonitoringAgent'
+        $deploymentWrapper | Should -Match 'Test-MonitoringContainment -VirtualMachineId'
+    }
+}
+
 Describe 'Azure CLI invocation contract' {
     BeforeAll {
         $deployAst = [System.Management.Automation.Language.Parser]::ParseFile(

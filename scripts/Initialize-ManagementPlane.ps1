@@ -329,6 +329,19 @@ exit /b 0
 
                 if ($created) {
                     Write-UnattendFile -VirtualHardDiskPath $osDiskPath -Content $UnattendContent
+
+                    # Dismount-VHD returns before the disk leaves the storage stack; New-VM fails if it is still attached.
+                    $detachDeadline = (Get-Date).AddSeconds(120)
+                    while ($true) {
+                        $osDisk = Get-VHD -Path $osDiskPath -ErrorAction SilentlyContinue
+                        if (-not $osDisk -or -not $osDisk.Attached) {
+                            break
+                        }
+                        if ((Get-Date) -ge $detachDeadline) {
+                            throw "'$osDiskPath' was still attached 120 seconds after specialization."
+                        }
+                        Start-Sleep -Seconds 3
+                    }
                 }
 
                 if ($created) {

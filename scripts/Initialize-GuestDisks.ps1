@@ -106,6 +106,29 @@ function Get-AvailableDriveLetter {
     throw 'No temporary drive letter is available for guest disk specialization.'
 }
 
+function Wait-VhdDetach {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [ValidateRange(10, 600)]
+        [int]$TimeoutSeconds = 120
+    )
+
+    # Install-WindowsFeature -Vhd and Dismount-VHD both return before the disk leaves the storage stack.
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ($true) {
+        $virtualHardDisk = Get-VHD -Path $Path -ErrorAction SilentlyContinue
+        if (-not $virtualHardDisk -or -not $virtualHardDisk.Attached) {
+            return
+        }
+        if ((Get-Date) -ge $deadline) {
+            throw "'$Path' was still attached $TimeoutSeconds seconds after the preceding offline operation completed."
+        }
+        Start-Sleep -Seconds 3
+    }
+}
+
 function Mount-GuestVhd {
     param(
         [Parameter(Mandatory)]
@@ -114,6 +137,8 @@ function Mount-GuestVhd {
         [ValidateRange(1, 30)]
         [int]$MaximumAttempts = 12
     )
+
+    Wait-VhdDetach -Path $Path
 
     for ($attempt = 1; $attempt -le $MaximumAttempts; $attempt++) {
         try {
@@ -329,6 +354,7 @@ $results = foreach ($virtualMachineConfiguration in @($configuration.VMs)) {
 
     foreach ($featureName in @($virtualMachineConfiguration.OfflineFeatures)) {
         $feature = Get-WindowsFeature -Vhd $operatingSystemDisk.Path -Name $featureName
+        Wait-VhdDetach -Path $operatingSystemDisk.Path
         if ($feature.InstallState -ne 'Installed') {
             Write-Step "Installing offline feature $featureName into $($virtualMachine.Name)..."
             Install-WindowsFeature `
@@ -336,6 +362,7 @@ $results = foreach ($virtualMachineConfiguration in @($configuration.VMs)) {
                 -Name $featureName `
                 -IncludeAllSubFeature `
                 -IncludeManagementTools | Out-Null
+            Wait-VhdDetach -Path $operatingSystemDisk.Path
         }
     }
 

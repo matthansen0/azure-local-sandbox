@@ -10,6 +10,7 @@ Azure subscription
     ├── VNet 172.31.0.0/16
     │   ├── Private host subnet + NAT Gateway
     │   └── Azure Bastion subnet (Basic and Standard SKUs only)
+    ├── Log Analytics workspace + data collection rule
     └── LocalBox-Client (Windows Server 2025, Hyper-V)
         ├── AzLHOST1 (Azure Local node)
         ├── AzLHOST2 (Azure Local node)
@@ -38,7 +39,7 @@ All outer and nested CIDRs must remain disjoint.
 
 ## Automation Stages
 
-1. Deploy the Azure resource group, VNet, NAT Gateway, Bastion, host VM, identity, and disks.
+1. Deploy the Azure resource group, VNet, NAT Gateway, Bastion, host VM, identity, disks, and monitoring.
 2. Install Hyper-V, combine data disks into a ReFS volume, and create host switches.
 3. Verify or convert operating-system media.
 4. Create `AzLMGMT`, `AzLHOST1`, and `AzLHOST2` with differencing disks.
@@ -119,6 +120,18 @@ Custom immutable HTTPS artifact URLs can be supplied instead.
 - The lab uses a 32-vCPU host, 1-TiB OS disk, eight Premium SSDs, Bastion, and NAT Gateway.
 - Deallocating the VM does not stop disk, Bastion, or NAT charges.
 - Spot pricing is intentionally unsupported.
+
+## Monitoring Containment
+
+[infra/modules/monitoring.bicep](../infra/modules/monitoring.bicep) creates a Log Analytics workspace, a data collection rule, and the Azure Monitor Agent inside the sandbox resource group and region. The module accepts no workspace parameter, so the host can only ever report to the workspace the deployment owns.
+
+- Ingestion is capped by `logAnalyticsDailyQuotaGb`, which defaults to 5 GB. Log Analytics stops ingesting for the rest of the UTC day once the cap is reached, so the worst-case bill for this workspace is bounded.
+- Retention defaults to 30 days, inside the included allowance.
+- The rule collects Critical, Error, and Warning events from `System`, `Application`, and two Hyper-V admin channels. It never collects the `Security` channel or Information-level events, which is the combination that makes a nested build expensive to ingest.
+- The agent is sequenced behind the bootstrap Custom Script Extension so the two extensions do not provision concurrently.
+- Set `deployMonitoring` to `false` to skip the workspace entirely.
+
+A subscription- or management-group-scoped `DeployIfNotExists` policy assignment, or Microsoft Defender for Cloud auto-provisioning, can still attach a second agent and rule that report to a workspace outside this lab. `Deploy.ps1` checks for that after a `Deploy` run and warns when the host carries a data collection rule from another resource group or the legacy `MicrosoftMonitoringAgent` extension. Exempt the sandbox resource group from that assignment to stop it recurring.
 
 This is an educational virtual deployment and is unsupported by Microsoft Support.
 

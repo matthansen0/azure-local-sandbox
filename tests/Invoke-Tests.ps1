@@ -72,6 +72,7 @@ if (-not $SkipBicep) {
     foreach ($templatePath in @(
         'infra/modules/network.bicep'
         'infra/modules/host.bicep'
+        'infra/modules/monitoring.bicep'
         'infra/main.bicep'
     )) {
         & $bicepCommand.Source build (Join-Path $repoRoot $templatePath) --stdout | Out-Null

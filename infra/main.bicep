@@ -49,6 +49,19 @@ param bastionSku string = 'Developer'
 @description('Run Bootstrap.ps1 through the Custom Script Extension.')
 param deployBootstrap bool = true
 
+@description('Deploy a sandbox-owned Log Analytics workspace and send LocalBox-Client event logs there instead of leaving the host for a subscription-wide monitoring policy to claim.')
+param deployMonitoring bool = true
+
+@description('Hard daily ingestion cap in GB for the sandbox workspace. Ingestion stops for the remainder of the UTC day once the cap is reached.')
+@minValue(1)
+@maxValue(200)
+param logAnalyticsDailyQuotaGb int = 5
+
+@description('Interactive retention in days for the sandbox workspace. Values above 31 are billed as extended retention.')
+@minValue(30)
+@maxValue(730)
+param logAnalyticsRetentionInDays int = 30
+
 @description('Public HTTPS URI for the bootstrap script. Override this when deploying a branch or fork.')
 @secure()
 param bootstrapScriptUri string
@@ -123,9 +136,26 @@ module host 'modules/host.bicep' = {
   }
 }
 
+// Consuming the host output sequences the Azure Monitor Agent after the bootstrap extension so the two
+// extensions do not provision concurrently on the same VM.
+module monitoring 'modules/monitoring.bicep' = if (deployMonitoring) {
+  name: '${namePrefix}-monitoring'
+  scope: sandboxResourceGroup
+  params: {
+    dailyQuotaGb: logAnalyticsDailyQuotaGb
+    location: location
+    namePrefix: namePrefix
+    retentionInDays: logAnalyticsRetentionInDays
+    tags: tags
+    virtualMachineName: host.outputs.virtualMachineName
+  }
+}
+
 output bastionName string = network.outputs.bastionName
 output bastionSku string = network.outputs.bastionSku
 output hostManagedIdentityPrincipalId string = host.outputs.managedIdentityPrincipalId
 output hostPrivateIpAddress string = host.outputs.privateIpAddress
 output hostVirtualMachineId string = host.outputs.virtualMachineId
+output logAnalyticsWorkspaceId string = monitoring.?outputs.workspaceId ?? ''
+output logAnalyticsWorkspaceName string = monitoring.?outputs.workspaceName ?? ''
 output resourceGroupName string = sandboxResourceGroup.name

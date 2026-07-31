@@ -27,6 +27,10 @@ param(
     [ValidateRange(127GB, 2TB)]
     [long]$BootDiskSizeBytes = 256GB,
 
+    # A DISM apply that burns no CPU and writes no bytes for this long is hung, not slow.
+    [ValidateRange(5, 240)]
+    [int]$ApplyStallMinutes = 20,
+
     [string]$DestinationDirectory = 'V:\VHDs',
 
     [string]$StateFile = 'C:\AzureLocalSandbox\State\images.json',
@@ -145,6 +149,9 @@ function Convert-InstallImageToVhdx {
         [Parameter(Mandatory)]
         [string]$ExpectedImageNamePattern,
 
+        [Parameter(Mandatory)]
+        [int]$StallMinutes,
+
         [switch]$Overwrite
     )
 
@@ -155,7 +162,9 @@ function Convert-InstallImageToVhdx {
         throw "Image index $ImageIndex was not found in '$($InstallImage.IsoPath)'. Available images: $($availableImages -join '; ')"
     }
     if ($selectedImage[0].ImageName -notmatch $ExpectedImageNamePattern) {
-        throw "Image index $ImageIndex ('$($selectedImage[0].ImageName)') does not match expected media pattern '$ExpectedImageNamePattern'."
+        $availableImages = $InstallImage.Images |
+            ForEach-Object { "$($_.ImageIndex): $($_.ImageName)" }
+        throw "Image index $ImageIndex ('$($selectedImage[0].ImageName)') does not match the required media pattern '$ExpectedImageNamePattern'. Available images: $($availableImages -join '; ')"
     }
 
     if (Test-Path -LiteralPath $DestinationPath) {
@@ -200,18 +209,56 @@ function Convert-InstallImageToVhdx {
             -NewFileSystemLabel 'Windows' `
             -Confirm:$false | Out-Null
 
-        Write-Step "Applying image index $ImageIndex ('$($selectedImage[0].ImageName)') with DISM. This takes several minutes..."
-        $dismOutput = & dism.exe `
-            /Apply-Image `
-            "/ImageFile:$($InstallImage.InstallImagePath)" `
-            "/Index:$ImageIndex" `
-            "/ApplyDir:${windowsDriveLetter}:\" `
-            /CheckIntegrity
-        if ($LASTEXITCODE -ne 0) {
-            throw "DISM failed to apply image index ${ImageIndex}: $($dismOutput -join [Environment]::NewLine)"
+        $dismLogPath = Join-Path $env:TEMP "dism-apply-$([IO.Path]::GetFileNameWithoutExtension($DestinationPath)).log"
+        Write-Step "Applying image index $ImageIndex ('$($selectedImage[0].ImageName)') with DISM. Expect 10-30 minutes; progress is reported every 5 minutes and logged to $dismLogPath."
+
+        # Redirection is deliberately avoided: capturing DISM's progress output hides it and can block
+        # the child process on a full pipe under Windows PowerShell 5.1.
+        $dismArguments = '/Apply-Image /ImageFile:"{0}" /Index:{1} /ApplyDir:{2}:\ /LogPath:"{3}"' -f
+            $InstallImage.InstallImagePath, $ImageIndex, $windowsDriveLetter, $dismLogPath
+        $dismProcess = Start-Process -FilePath 'dism.exe' -ArgumentList $dismArguments -NoNewWindow -PassThru
+
+        $applyStopwatch = [Diagnostics.Stopwatch]::StartNew()
+        $lastProcessorSeconds = -1
+        $lastAppliedBytes = -1L
+        $lastProgressAt = [datetime]::UtcNow
+        $heartbeatAt = [datetime]::UtcNow.AddMinutes(5)
+        while (-not $dismProcess.WaitForExit(30000)) {
+            $dismProcess.Refresh()
+            $processorSeconds = $dismProcess.TotalProcessorTime.TotalSeconds
+            $appliedBytes = (Get-Item -LiteralPath $DestinationPath).Length
+
+            if ($processorSeconds -gt $lastProcessorSeconds -or $appliedBytes -gt $lastAppliedBytes) {
+                $lastProcessorSeconds = $processorSeconds
+                $lastAppliedBytes = $appliedBytes
+                $lastProgressAt = [datetime]::UtcNow
+            }
+            elseif (([datetime]::UtcNow - $lastProgressAt).TotalMinutes -ge $StallMinutes) {
+                Stop-Process -Id $dismProcess.Id -Force -ErrorAction SilentlyContinue
+                throw "DISM (PID $($dismProcess.Id)) used no CPU and wrote no data for $StallMinutes minutes and was stopped. That is a hang, not slow media: inspect $dismLogPath, then clear any wedged servicing session with 'Get-Process dism, DismHost -ErrorAction SilentlyContinue | Stop-Process -Force' and rerun."
+            }
+
+            if ([datetime]::UtcNow -ge $heartbeatAt) {
+                Write-Step ('Applying image index {0}: {1:N1} GB written, {2:N0} s CPU, {3} elapsed.' -f
+                    $ImageIndex, ($appliedBytes / 1GB), $processorSeconds, $applyStopwatch.Elapsed.ToString('hh\:mm\:ss'))
+                $heartbeatAt = [datetime]::UtcNow.AddMinutes(5)
+            }
+        }
+        $applyStopwatch.Stop()
+
+        if ($dismProcess.ExitCode -ne 0) {
+            $dismLogTail = if (Test-Path -LiteralPath $dismLogPath) {
+                (Get-Content -LiteralPath $dismLogPath -Tail 20) -join [Environment]::NewLine
+            }
+            else {
+                'No DISM log was produced.'
+            }
+            throw "DISM failed to apply image index ${ImageIndex} (exit code $($dismProcess.ExitCode)). Last log lines from ${dismLogPath}:$([Environment]::NewLine)$dismLogTail"
         }
 
-        $bcdOutput = & bcdboot.exe `
+        Write-Step "Applied image index $ImageIndex in $($applyStopwatch.Elapsed.ToString('hh\:mm\:ss'))."
+
+        $bcdOutput = & "${windowsDriveLetter}:\Windows\System32\bcdboot.exe" `
             "${windowsDriveLetter}:\Windows" `
             /s "${efiDriveLetter}:" `
             /f UEFI
@@ -298,7 +345,8 @@ try {
             -ImageIndex $WindowsServerImageIndex `
             -DestinationPath (Join-Path $DestinationDirectory 'WindowsServer2025.vhdx') `
             -DiskSizeBytes $BootDiskSizeBytes `
-            -ExpectedImageNamePattern 'Windows Server 2025' `
+            -ExpectedImageNamePattern 'Windows Server 2025.*\(Desktop Experience\)' `
+            -StallMinutes $ApplyStallMinutes `
             -Overwrite:$Force
         Convert-InstallImageToVhdx `
             -InstallImage $azureLocalInstallImage `
@@ -306,6 +354,7 @@ try {
             -DestinationPath (Join-Path $DestinationDirectory 'AzureLocal.vhdx') `
             -DiskSizeBytes $BootDiskSizeBytes `
             -ExpectedImageNamePattern 'Azure Stack HCI|Azure Local' `
+            -StallMinutes $ApplyStallMinutes `
             -Overwrite:$Force
     )
 

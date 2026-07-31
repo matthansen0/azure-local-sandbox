@@ -91,9 +91,30 @@ If the source directory is missing, inspect `Bootstrap.log` and the VM extension
 
 - Ensure the file contains `sources\install.wim` or `sources\install.esd`.
 - Run `Convert-LabIsoMedia.ps1 -ListImages` and choose the correct indexes.
-- Windows media must match `Windows Server 2025`.
+- Windows media must match `Windows Server 2025` and must be a `(Desktop Experience)` index. On evaluation media that is usually index 4, not index 3.
 - Azure Local media must identify as `Azure Stack HCI` or `Azure Local`.
 - Verify the expected SHA-256 before retrying.
+
+### Image conversion sits on "Applying image index"
+
+The apply now prints a progress line every five minutes with the bytes written and the CPU seconds
+DISM has consumed. If those numbers keep rising, it is working: expect 10-30 minutes per image.
+
+If Task Manager shows dism.exe with flat CPU *and* flat disk, DISM is hung rather than slow. The
+converter stops it after 20 minutes of no progress (`-ApplyStallMinutes` tunes the threshold) and
+fails with the log path. Collect evidence and clear the wedged servicing session:
+
+```powershell
+Get-Content "$env:TEMP\dism-apply-WindowsServer2025.log" -Tail 60
+Get-Process dism, DismHost -ErrorAction SilentlyContinue |
+    Select-Object Name, Id, StartTime, TotalProcessorTime
+Get-Process dism, DismHost -ErrorAction SilentlyContinue | Stop-Process -Force
+Clear-WindowsCorruptMountPoint
+```
+
+The last lines of the DISM log identify where it stopped. Runs from before this fix logged to
+`C:\Windows\Logs\DISM\dism.log` instead. Rerun the stage afterwards; a partial VHDX is deleted on
+failure, so the conversion restarts cleanly.
 
 ### Azure Local provider principal is not found
 

@@ -186,10 +186,28 @@ $readinessResults = foreach ($nodeConfiguration in $nodeConfigurations) {
             Restart-Service W32Time
             w32tm.exe /resync /force | Out-Null
 
-            $requiredCommands = @('Invoke-AzStackHciArcInitialization')
-            foreach ($requiredCommand in $requiredCommands) {
-                if (-not (Get-Command $requiredCommand -ErrorAction SilentlyContinue)) {
-                    throw "Required Azure Local command '$requiredCommand' is unavailable on '$env:COMPUTERNAME'."
+            # The Azure Local image stages AzureEdgeBootstrap through a scheduled task, so the Arc
+            # installer is absent until that task has run at least once.
+            if (-not (Get-Command 'Invoke-AzStackHciArcInitialization' -ErrorAction SilentlyContinue)) {
+                $customizationTask = Get-ScheduledTask `
+                    -TaskName 'ImageCustomizationScheduledTask' `
+                    -ErrorAction SilentlyContinue
+                if (-not $customizationTask) {
+                    throw "'Invoke-AzStackHciArcInitialization' and 'ImageCustomizationScheduledTask' are both missing on '$env:COMPUTERNAME'. The OS disk is not Azure Local media."
+                }
+
+                if ($customizationTask.State -ne 'Running') {
+                    $customizationTask | Start-ScheduledTask
+                }
+
+                $bootstrapDeadline = (Get-Date).AddMinutes(15)
+                while (-not (Get-Command 'Invoke-AzStackHciArcInitialization' -ErrorAction SilentlyContinue)) {
+                    if ((Get-Date) -ge $bootstrapDeadline) {
+                        throw "ImageCustomizationScheduledTask did not stage the Arc installer on '$env:COMPUTERNAME' within 15 minutes. Inspect the task history in Task Scheduler."
+                    }
+                    Start-Sleep -Seconds 15
+                    # Forces a fresh module scan; command discovery in a live session can be cached.
+                    Import-Module AzsHCI.ARCinstaller -Force -ErrorAction SilentlyContinue
                 }
             }
 

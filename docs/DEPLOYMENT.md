@@ -101,6 +101,12 @@ Use `-Location` and `-AzureLocalLocation` to control the host and Arc/cluster re
 
 Pass `-BastionSku Developer`, `-BastionSku Basic`, or `-BastionSku Standard` to override the choice. The supported Developer regions are listed in [config/dependencies.psd1](../config/dependencies.psd1).
 
+### Monitoring
+
+The deployment creates its own Log Analytics workspace in the sandbox resource group and region, and onboards `LocalBox-Client` to it with the Azure Monitor Agent. Ingestion is capped at 5 GB per day and the rule collects only Critical, Error, and Warning events, never the `Security` channel. Override `logAnalyticsDailyQuotaGb` and `logAnalyticsRetentionInDays` in [infra/main.bicepparam](../infra/main.bicepparam), or set `deployMonitoring = false` to skip it.
+
+After a `Deploy` run the script reports any data collection rule attached to the host from outside the sandbox resource group. That indicates a subscription-wide monitoring policy or Defender for Cloud auto-provisioning is billing this lab's telemetry to a workspace the sandbox does not own. See [monitoring containment](TECHNICAL.md#monitoring-containment).
+
 The script resolves an exact Windows Server marketplace image, verifies the pinned Bicep version, creates private deployment artifacts, and deploys the resource group.
 
 Bootstrap installs Hyper-V and initiates one reboot. Connect through Bastion as `localadmin`, using the password set in `AZURE_LOCAL_SANDBOX_ADMIN_PASSWORD`, and wait for readiness:
@@ -116,12 +122,12 @@ Readiness checks the host OS, virtualization extensions, memory, storage, Hyper-
 
 1. Connect to `LocalBox-Client` through Azure Bastion.
 2. Download these two ISO files inside `LocalBox-Client`:
-  - **Windows Server 2025** from a licensed Microsoft channel or the [Microsoft Evaluation Center](https://www.microsoft.com/evalcenter/download-windows-server-2025). This becomes the parent disk for the nested management host.
+  - **Windows Server 2025** from a licensed Microsoft channel or the [Microsoft Evaluation Center](https://www.microsoft.com/evalcenter/download-windows-server-2025). This becomes the parent disk for the nested management host, so a `(Desktop Experience)` image index is required.
   - **Azure Local** from **Azure portal > Azure Local > Get started > Download software**. Select the subscription and release, accept the license terms, and download the ISO. This becomes the parent disk for the two Azure Local nodes.
 3. Double-click **Azure Local Sandbox Setup** on the public desktop.
 4. Approve elevation.
 5. Select both ISO files.
-6. Confirm their trusted origin and choose the displayed image indexes.
+6. Confirm their trusted origin and choose the displayed image indexes. For Windows Server, pick a **(Desktop Experience)** index. A Server Core index cannot install the management tools the nested management host needs, and the conversion rejects it.
 7. Enter the three nested credentials.
 8. Choose **Validate** for the first run.
 
@@ -151,6 +157,8 @@ List ISO image indexes:
   -AzureLocalIsoPath 'C:\AzureLocalSandbox\Media\AzureLocal.iso' `
   -ListImages
 ```
+
+Choose the Windows Server index whose name ends in `(Desktop Experience)`. On evaluation media that is index 4, not index 3. Server Core indexes are rejected because the nested management host cannot install its Hyper-V management tools from them.
 
 Run validation:
 

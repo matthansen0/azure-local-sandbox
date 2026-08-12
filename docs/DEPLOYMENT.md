@@ -179,36 +179,6 @@ After successful validation, rerun with credentials and `-Deploy`; media argumen
 
 Prebuilt generalized VHDX media is also supported through the `WindowsServerUri`, `WindowsServerSha256`, `AzureLocalUri`, and `AzureLocalSha256` parameters.
 
-## Unattended Alternative
-
-The sandbox can be built without RDP or inbound NSG rules. Supply the host and
-nested credentials through environment variables, deploy the outer host, and use
-Azure VM Run Command to start a resumable SYSTEM scheduled task:
-
-```powershell
-$env:AZURE_LOCAL_SANDBOX_ADMIN_PASSWORD = '<outer-host-password>'
-$env:AZURE_LOCAL_SANDBOX_NESTED_ADMIN_PASSWORD = '<nested-local-password>'
-$env:AZURE_LOCAL_SANDBOX_DOMAIN_ADMIN_PASSWORD = '<domain-password>'
-$env:AZURE_LOCAL_SANDBOX_LCM_PASSWORD = '<lcm-deployment-password>'
-
-./scripts/Deploy.ps1 -Mode Deploy -Location centralus -AzureLocalLocation eastus
-./scripts/Start-RemoteSandboxDeployment.ps1
-```
-
-The remote controller uses protected Run Command parameters. On the VM, the
-scheduled task runs as SYSTEM and persists the nested credentials with Windows
-DPAPI. It downloads the pinned Microsoft ISO URLs, verifies their SHA-256 values,
-and resumes from the stage state files after a corrected rerun.
-
-Query progress without opening network access:
-
-```powershell
-./scripts/Get-RemoteSandboxDeploymentStatus.ps1
-```
-
-The workflow performs Azure Local validation before starting the cloud deployment.
-ISO conversion and deployment logs remain under `C:\AzureLocalSandbox\Logs`.
-
 ## Validation
 
 Run repository checks from a development workstation:

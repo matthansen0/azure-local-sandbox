@@ -42,7 +42,7 @@ foreach ($name in $requiredSecrets) {
 $virtualMachine = az vm show `
     --resource-group $ResourceGroupName `
     --name $VirtualMachineName `
-    --query '{location:location,powerState:instanceView.statuses[1].displayStatus}' `
+    --query '{id:id,location:location,powerState:instanceView.statuses[1].displayStatus}' `
     --show-details `
     --only-show-errors `
     --output json | ConvertFrom-Json
@@ -70,12 +70,23 @@ if (-not (Test-Path -LiteralPath '$remoteScriptPath')) { throw 'The staged unatt
     -LcmPassword `$LcmPassword
 "@
 
-az vm run-command delete `
-    --resource-group $ResourceGroupName `
-    --vm-name $VirtualMachineName `
-    --name $RunCommandName `
+$runCommandResourceId = "$($virtualMachine.id)/runCommands/$RunCommandName"
+$existingRunCommand = az resource show `
+    --ids $runCommandResourceId `
+    --query id `
     --only-show-errors `
-    --output none 2>$null
+    --output tsv 2>$null
+if ($existingRunCommand) {
+    az vm run-command delete `
+        --resource-group $ResourceGroupName `
+        --vm-name $VirtualMachineName `
+        --name $RunCommandName `
+        --only-show-errors `
+        --output none
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to replace managed Run Command '$RunCommandName'."
+    }
+}
 
 az vm run-command create `
     --resource-group $ResourceGroupName `

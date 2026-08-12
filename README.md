@@ -86,6 +86,10 @@ options, command-line setup, and validation commands.
 
 ## Validation
 
+Open the repository in its dev container to install PowerShell, Azure CLI, GitHub
+CLI, pinned Bicep, Pester, and PSScriptAnalyzer. VS Code offers **Reopen in
+Container** when it detects [.devcontainer/devcontainer.json](.devcontainer/devcontainer.json).
+
 Run the local repository checks before release or dependency updates:
 
 ```powershell

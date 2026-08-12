@@ -81,6 +81,7 @@ if ($existingRunCommand) {
         --resource-group $ResourceGroupName `
         --vm-name $VirtualMachineName `
         --name $RunCommandName `
+        --no-wait `
         --only-show-errors `
         --output none
     if ($LASTEXITCODE -ne 0) {
@@ -94,6 +95,7 @@ az vm run-command create `
     --location $virtualMachine.location `
     --name $RunCommandName `
     --script $launcher `
+    --async-execution true `
     --protected-parameters `
         "LocalAdministratorPassword=$env:AZURE_LOCAL_SANDBOX_NESTED_ADMIN_PASSWORD" `
         "DomainAdministratorPassword=$env:AZURE_LOCAL_SANDBOX_DOMAIN_ADMIN_PASSWORD" `

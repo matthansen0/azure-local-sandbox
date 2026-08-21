@@ -841,11 +841,13 @@ exit /b 0
                         }
                     }
 
+                    # A forest with no forwarders reports IPAddress as $null rather than an empty
+                    # array, and piping $null runs the body once with $_ unset.
                     $forwarderConfiguration = Get-DnsServerForwarder -ErrorAction SilentlyContinue
                     $existingForwarders = @(
-                        if ($forwarderConfiguration) {
-                            $forwarderConfiguration.IPAddress | ForEach-Object { $_.IPAddressToString }
-                        }
+                        $forwarderConfiguration.IPAddress |
+                            Where-Object { $_ } |
+                            ForEach-Object { $_.IPAddressToString }
                     )
                     if ($DnsForwarder -notin $existingForwarders) {
                         Add-DnsServerForwarder -IPAddress $DnsForwarder -PassThru | Out-Null

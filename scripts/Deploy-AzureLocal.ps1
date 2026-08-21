@@ -171,6 +171,8 @@ function Get-AzureDeploymentParameter {
         )
         networkingType                     = 'switchlessMultiServerDeployment'
         networkingPattern                  = 'convergedManagementCompute'
+        # Nested guests only get Hyper-V synthetic adapters, which report RDMA as enabled by the
+        # driver but never operational, so validation fails unless both intents override it off.
         intentList                         = @(
             @{
                 name                               = 'Compute_Management'
@@ -187,10 +189,10 @@ function Get-AzureDeploymentParameter {
                     priorityValue8021Action_SMB     = '3'
                     bandwidthPercentage_SMB         = '50'
                 }
-                overrideAdapterProperty            = $false
+                overrideAdapterProperty            = $true
                 adapterPropertyOverrides           = @{
-                    jumboPacket             = '9014'
-                    networkDirect           = 'Enabled'
+                    jumboPacket             = '1514'
+                    networkDirect           = 'Disabled'
                     networkDirectTechnology = 'RoCEv2'
                 }
             }
@@ -209,10 +211,10 @@ function Get-AzureDeploymentParameter {
                     priorityValue8021Action_SMB     = '3'
                     bandwidthPercentage_SMB         = '50'
                 }
-                overrideAdapterProperty            = $false
+                overrideAdapterProperty            = $true
                 adapterPropertyOverrides           = @{
-                    jumboPacket             = '9014'
-                    networkDirect           = 'Enabled'
+                    jumboPacket             = '1514'
+                    networkDirect           = 'Disabled'
                     networkDirectTechnology = 'RoCEv2'
                 }
             }

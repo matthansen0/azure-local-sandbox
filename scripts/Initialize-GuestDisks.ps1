@@ -205,16 +205,44 @@ function Write-GuestUnattendFile {
 
         $setupScriptsPath = "${windowsDriveLetter}:\Windows\Setup\Scripts"
         New-Item -Path $setupScriptsPath -ItemType Directory -Force | Out-Null
-        @'
+
+        # Azure Local media ships a SetupComplete.cmd that installs the Arc bootstrap package, and
+        # replacing it leaves the node without Invoke-AzStackHciArcInitialization.
+        $existingSetupComplete = Get-ChildItem `
+            -LiteralPath $setupScriptsPath `
+            -Filter 'SetupComplete.cmd' `
+            -Force `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        $setupCompletePath = if ($existingSetupComplete) {
+            $existingSetupComplete.FullName
+        }
+        else {
+            Join-Path $setupScriptsPath 'SetupComplete.cmd'
+        }
+        $vendorCommands = if ($existingSetupComplete) {
+            (Get-Content -LiteralPath $existingSetupComplete.FullName -Raw).TrimEnd()
+        }
+        else {
+            'exit /b 0'
+        }
+
+        $sandboxMarker = 'REM AzureLocalSandbox'
+        if ($vendorCommands -notmatch [regex]::Escape($sandboxMarker)) {
+            # The sandbox commands run first because the vendor bootstrap can reboot the node.
+            $sandboxCommands = @"
 @echo off
+$sandboxMarker
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "Enable-PSRemoting -Force; Set-NetFirewallRule -DisplayGroup 'Remote Desktop' -Enabled True -ErrorAction SilentlyContinue"
 del /f /q C:\Windows\Panther\Unattend.xml 2>nul
 del /f /q C:\Windows\Panther\Unattend\Unattend.xml 2>nul
 del /f /q C:\Windows\System32\Sysprep\Unattend.xml 2>nul
-exit /b 0
-'@ | Set-Content `
-            -LiteralPath (Join-Path $setupScriptsPath 'SetupComplete.cmd') `
-            -Encoding Ascii
+"@
+            Set-Content `
+                -LiteralPath $setupCompletePath `
+                -Value (@($sandboxCommands, $vendorCommands) -join "`r`n") `
+                -Encoding Ascii
+        }
 
         if ($temporaryDriveLetter) {
             $windowsPartition | Remove-PartitionAccessPath -AccessPath "${temporaryDriveLetter}:\"

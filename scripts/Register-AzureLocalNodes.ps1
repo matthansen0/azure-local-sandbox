@@ -203,7 +203,11 @@ $readinessResults = foreach ($nodeConfiguration in $nodeConfigurations) {
                     -TaskName 'ImageCustomizationScheduledTask' `
                     -ErrorAction SilentlyContinue
                 if (-not $customizationTask) {
-                    throw "'Invoke-AzStackHciArcInitialization' and 'ImageCustomizationScheduledTask' are both missing on '$env:COMPUTERNAME'. The OS disk is not Azure Local media."
+                    $bootstrapSetup = 'C:\BootstrapPackage\bootstrap\content\Bootstrap-Setup.ps1'
+                    if (Test-Path -LiteralPath $bootstrapSetup) {
+                        throw "'$env:COMPUTERNAME' is Azure Local media, but its first-boot bootstrap never ran, so the Arc installer was never staged. Run this on the node and let it reboot, then rerun: & 'C:\startupScriptsWrapper.ps1' '$bootstrapSetup -Install'"
+                    }
+                    throw "'Invoke-AzStackHciArcInitialization', 'ImageCustomizationScheduledTask' and the bootstrap package are all missing on '$env:COMPUTERNAME'. The OS disk is not Azure Local media."
                 }
 
                 if ($customizationTask.State -ne 'Running') {

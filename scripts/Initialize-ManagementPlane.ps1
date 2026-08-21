@@ -1031,12 +1031,19 @@ exit /b 0
             -ErrorAction SilentlyContinue |
             Where-Object NextHop -eq $configuration.Networks.Management.Gateway
         if (-not $route) {
-            New-NetRoute `
-                -InterfaceIndex $internalSwitchAdapter.ifIndex `
-                -DestinationPrefix $destinationPrefix `
-                -NextHop $configuration.Networks.Management.Gateway `
-                -RouteMetric 50 `
-                -PolicyStore PersistentStore | Out-Null
+            $routeParameters = @{
+                InterfaceIndex    = $internalSwitchAdapter.ifIndex
+                DestinationPrefix = $destinationPrefix
+                NextHop           = $configuration.Networks.Management.Gateway
+                RouteMetric       = 50
+            }
+            try {
+                # Windows Server 2025 build 26100 rejects PersistentStore with ERROR_INVALID_PARAMETER.
+                New-NetRoute @routeParameters -PolicyStore PersistentStore -ErrorAction Stop | Out-Null
+            }
+            catch {
+                New-NetRoute @routeParameters -ErrorAction Stop | Out-Null
+            }
         }
     }
 }

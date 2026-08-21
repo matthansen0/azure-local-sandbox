@@ -221,6 +221,13 @@ Describe 'Monitoring containment contract' {
         $monitoringTemplate | Should -Not -Match '(?i)param\s+\w*workspace\w*\s+string'
     }
 
+    It 'materializes the Event table before creating the data collection rule' {
+        $monitoringTemplate |
+            Should -Match "resource eventTable 'Microsoft\.OperationalInsights/workspaces/tables@"
+        $monitoringTemplate | Should -Match "name: 'Event'"
+        $monitoringTemplate | Should -Match 'dependsOn:\s*\[\s*eventTable\s*\]'
+    }
+
     It 'caps daily ingestion and keeps retention inside the included allowance' {
         $monitoringTemplate | Should -Match 'dailyQuotaGb: dailyQuotaGb'
         $mainTemplate | Should -Match 'param logAnalyticsDailyQuotaGb int'

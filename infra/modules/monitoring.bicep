@@ -52,6 +52,17 @@ resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   }
 }
 
+// DCR validation resolves built-in streams against workspace tables, which can lag workspace creation.
+resource eventTable 'Microsoft.OperationalInsights/workspaces/tables@2025-02-01' = {
+  parent: workspace
+  name: 'Event'
+  properties: {
+    plan: 'Analytics'
+    retentionInDays: retentionInDays
+    totalRetentionInDays: retentionInDays
+  }
+}
+
 resource dataCollectionRule 'Microsoft.Insights/dataCollectionRules@2023-03-11' = {
   name: dataCollectionRuleName
   location: location
@@ -94,6 +105,9 @@ resource dataCollectionRule 'Microsoft.Insights/dataCollectionRules@2023-03-11' 
       }
     ]
   }
+  dependsOn: [
+    eventTable
+  ]
 }
 
 resource virtualMachine 'Microsoft.Compute/virtualMachines@2024-07-01' existing = {

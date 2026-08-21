@@ -630,10 +630,37 @@ exit /b 0
                         }
                     }
 
-                    Restart-Service -Name RemoteAccess -Force
+                    # RRAS refuses a stop control for a short window after its NAT configuration is
+                    # rewritten, and Restart-Service reports that as a terminal error even though the
+                    # netsh changes are already live in the running service.
+                    $restartDeadline = (Get-Date).AddMinutes(5)
+                    $routingRestarted = $false
+                    while (-not $routingRestarted) {
+                        try {
+                            Restart-Service -Name RemoteAccess -Force -ErrorAction Stop
+                            $routingRestarted = $true
+                        }
+                        catch {
+                            if ((Get-Date) -ge $restartDeadline) {
+                                break
+                            }
+                            Start-Sleep -Seconds 15
+                        }
+                    }
+
+                    $routingService = Get-Service -Name RemoteAccess
+                    if ($routingService.Status -ne 'Running') {
+                        Start-Service -Name RemoteAccess -ErrorAction SilentlyContinue
+                        $routingService.WaitForStatus('Running', [timespan]::FromSeconds(120))
+                    }
+
                     Enable-PSRemoting -Force -SkipNetworkProfileCheck
 
-                    [pscustomobject]@{ Name = $env:COMPUTERNAME; Result = 'RouterReady' }
+                    [pscustomobject]@{
+                        Name             = $env:COMPUTERNAME
+                        Result           = 'RouterReady'
+                        RoutingRestarted = $routingRestarted
+                    }
                 }
         }
 

@@ -74,8 +74,8 @@ function Get-InstalledBicepVersion {
     if ($LASTEXITCODE -ne 0) {
         return $null
     }
-    if (($output -join ' ') -match '(\d+\.\d+\.\d+)') {
-        return $Matches[1]
+    if (($output -join ' ') -match 'Bicep CLI version\s+(?<version>\d+\.\d+\.\d+)') {
+        return $Matches['version']
     }
 
     return $null

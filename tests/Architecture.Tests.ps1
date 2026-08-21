@@ -282,6 +282,18 @@ Describe 'Azure CLI invocation contract' {
         $deployAst = [System.Management.Automation.Language.Parser]::ParseFile(
             (Join-Path $repoRoot 'scripts/Deploy.ps1'), [ref]$null, [ref]$null)
 
+        $bicepVersionFunction = $deployAst.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq 'Get-InstalledBicepVersion'
+            }, $true)
+        $bicepVersionMatch = $bicepVersionFunction.Body.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.BinaryExpressionAst] -and
+                $node.Operator -eq [System.Management.Automation.Language.TokenKind]::Imatch
+            }, $true)
+        $bicepVersionPattern = $bicepVersionMatch.Right.SafeGetValue()
+
         $commonArgumentsAssignment = $deployAst.Find({
                 param($node)
                 $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
@@ -303,6 +315,16 @@ Describe 'Azure CLI invocation contract' {
                 }
             }
         )
+    }
+
+    It 'ignores upgrade notices when reading the installed Bicep version' {
+        $output = @(
+            'WARNING: A new Bicep release is available: v0.46.1. Upgrade now by running "az bicep upgrade".'
+            'Bicep CLI version 0.45.15 (6a4a640fd8)'
+        ) -join ' '
+
+        $parsedVersion = if ($output -match $bicepVersionPattern) { $Matches['version'] }
+        $parsedVersion | Should -Be '0.45.15'
     }
 
     It 'keeps --parameters last so appended template overrides are parsed' {

@@ -109,46 +109,51 @@ function Wait-NestedPowerShellDirect {
         [string]$VirtualMachineName,
 
         [Parameter(Mandatory)]
-        [PSCredential]$Credential,
+        [PSCredential[]]$Credential,
 
         [Parameter(Mandatory)]
         [int]$TimeoutMinutes
     )
 
     Write-Step "Waiting for PowerShell Direct on nested VM $VirtualMachineName (timeout $TimeoutMinutes minutes)..."
-    $ready = Invoke-Command `
+    $acceptedIndex = Invoke-Command `
         -Session $ManagementSession `
         -ArgumentList $VirtualMachineName, $Credential, $TimeoutMinutes `
         -ScriptBlock {
             param(
                 [string]$VirtualMachineName,
-                [PSCredential]$Credential,
+                [PSCredential[]]$Credential,
                 [int]$TimeoutMinutes
             )
 
             $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
             do {
-                try {
-                    $computerName = Invoke-Command `
-                        -VMName $VirtualMachineName `
-                        -Credential $Credential `
-                        -ScriptBlock { $env:COMPUTERNAME } `
-                        -ErrorAction Stop
-                    if ($computerName -eq $VirtualMachineName) {
-                        return $true
+                for ($index = 0; $index -lt $Credential.Count; $index++) {
+                    try {
+                        $computerName = Invoke-Command `
+                            -VMName $VirtualMachineName `
+                            -Credential $Credential[$index] `
+                            -ScriptBlock { $env:COMPUTERNAME } `
+                            -ErrorAction Stop
+                        if ($computerName -eq $VirtualMachineName) {
+                            return $index
+                        }
+                    }
+                    catch {
                     }
                 }
-                catch {
-                    Start-Sleep -Seconds 10
-                }
+
+                Start-Sleep -Seconds 10
             } while ((Get-Date) -lt $deadline)
 
-            return $false
+            return -1
         }
 
-    if (-not $ready) {
+    if ($acceptedIndex -lt 0) {
         throw "PowerShell Direct did not become ready on nested VM '$VirtualMachineName' within $TimeoutMinutes minutes."
     }
+
+    return $Credential[$acceptedIndex]
 }
 
 function ConvertTo-DomainDistinguishedName {
@@ -208,6 +213,13 @@ try {
 
     $domainControllerLocalCredential = [PSCredential]::new(
         'Administrator',
+        $DomainAdministratorCredential.Password
+    )
+
+    # Promotion replaces the local account with the domain one, so a resumed run has to
+    # authenticate to the domain controller as JUMPSTART\Administrator instead.
+    $domainCredential = [PSCredential]::new(
+        "$($configuration.Domain.NetBiosName)\Administrator",
         $DomainAdministratorCredential.Password
     )
 
@@ -450,7 +462,7 @@ exit /b 0
         }
     }
 
-    Wait-NestedPowerShellDirect `
+    $null = Wait-NestedPowerShellDirect `
         -ManagementSession $managementSession `
         -VirtualMachineName 'Vm-Router' `
         -Credential $LocalAdministratorCredential `
@@ -492,7 +504,7 @@ exit /b 0
         Invoke-Command -Session $managementSession -ScriptBlock {
             Restart-VM -Name 'Vm-Router' -Force
         }
-        Wait-NestedPowerShellDirect `
+        $null = Wait-NestedPowerShellDirect `
             -ManagementSession $managementSession `
             -VirtualMachineName 'Vm-Router' `
             -Credential $LocalAdministratorCredential `
@@ -664,16 +676,16 @@ exit /b 0
                 }
         }
 
-    Wait-NestedPowerShellDirect `
+    $domainControllerCredential = Wait-NestedPowerShellDirect `
         -ManagementSession $managementSession `
         -VirtualMachineName $domainControllerName `
-        -Credential $domainControllerLocalCredential `
+        -Credential @($domainControllerLocalCredential, $domainCredential) `
         -TimeoutMinutes $GuestReadyTimeoutMinutes
 
     Write-Step 'Promoting the domain controller. Install-ADDSForest takes several minutes...'
     $promotionResult = Invoke-Command `
         -Session $managementSession `
-        -ArgumentList $domainControllerName, $domainControllerLocalCredential, $configuration `
+        -ArgumentList $domainControllerName, $domainControllerCredential, $configuration `
         -ScriptBlock {
             param(
                 [string]$DomainControllerName,
@@ -765,11 +777,7 @@ exit /b 0
         }
     }
 
-    $domainCredential = [PSCredential]::new(
-        "$($configuration.Domain.NetBiosName)\Administrator",
-        $DomainAdministratorCredential.Password
-    )
-    Wait-NestedPowerShellDirect `
+    $null = Wait-NestedPowerShellDirect `
         -ManagementSession $managementSession `
         -VirtualMachineName $domainControllerName `
         -Credential $domainCredential `

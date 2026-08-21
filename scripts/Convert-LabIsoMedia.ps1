@@ -246,14 +246,16 @@ function Convert-InstallImageToVhdx {
         }
         $applyStopwatch.Stop()
 
-        if ($dismProcess.ExitCode -ne 0) {
+        $dismProcess.Refresh()
+        $dismExitCode = $dismProcess.ExitCode
+        if ($dismExitCode -ne 0) {
             $dismLogTail = if (Test-Path -LiteralPath $dismLogPath) {
                 (Get-Content -LiteralPath $dismLogPath -Tail 20) -join [Environment]::NewLine
             }
             else {
                 'No DISM log was produced.'
             }
-            throw "DISM failed to apply image index ${ImageIndex} (exit code $($dismProcess.ExitCode)). Last log lines from ${dismLogPath}:$([Environment]::NewLine)$dismLogTail"
+            throw "DISM failed to apply image index ${ImageIndex} (exit code $dismExitCode). Last log lines from ${dismLogPath}:$([Environment]::NewLine)$dismLogTail"
         }
 
         Write-Step "Applied image index $ImageIndex in $($applyStopwatch.Elapsed.ToString('hh\:mm\:ss'))."

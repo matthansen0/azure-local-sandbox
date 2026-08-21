@@ -149,6 +149,15 @@ $domainCredential = Get-Credential -UserName 'JUMPSTART\Administrator'
 $lcmCredential = Get-Credential -UserName 'LocalBoxDeployUser'
 ```
 
+To update the staged scripts from GitHub without touching downloaded media or deployment state, run this from an elevated PowerShell session on `LocalBox-Client`:
+
+```powershell
+Set-Location C:\AzureLocalSandbox\Source
+./scripts/Update-SandboxSource.ps1
+```
+
+The updater downloads the `main` branch, overlays `C:\AzureLocalSandbox\Source`, and preserves `C:\AzureLocalSandbox\Media`, `C:\AzureLocalSandbox\State`, and `C:\AzureLocalSandbox\Artifacts`. Rerun the command after each pushed change, then continue with the normal command-line workflow below.
+
 List ISO image indexes:
 
 ```powershell

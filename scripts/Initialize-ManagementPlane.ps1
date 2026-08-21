@@ -804,11 +804,42 @@ exit /b 0
                     Set-StrictMode -Version Latest
                     $ErrorActionPreference = 'Stop'
 
+                    # Promotion leaves ADWS disabled, and the ActiveDirectory module has no other
+                    # transport, so every AD cmdlet fails until the service is enabled and started.
+                    $directoryWebServices = Get-Service -Name ADWS
+                    if ($directoryWebServices.StartType -ne 'Automatic') {
+                        Set-Service -Name ADWS -StartupType Automatic
+                    }
+                    if ($directoryWebServices.Status -ne 'Running') {
+                        Start-Service -Name ADWS
+                        (Get-Service -Name ADWS).WaitForStatus('Running', [timespan]::FromSeconds(180))
+                    }
+
                     Import-Module ActiveDirectory
                     Import-Module DnsServer
 
-                    $existingForwarders = @(Get-DnsServerForwarder | Select-Object -ExpandProperty IPAddress)
-                    if ($DnsForwarder -notin $existingForwarders.IPAddressToString) {
+                    # ADWS starts accepting directory queries a couple of minutes after it reports running.
+                    $directoryDeadline = (Get-Date).AddMinutes(10)
+                    while ($true) {
+                        try {
+                            $null = Get-ADDomain -ErrorAction Stop
+                            break
+                        }
+                        catch {
+                            if ((Get-Date) -ge $directoryDeadline) {
+                                throw "Active Directory Web Services on '$env:COMPUTERNAME' did not accept directory queries within 10 minutes."
+                            }
+                            Start-Sleep -Seconds 10
+                        }
+                    }
+
+                    $forwarderConfiguration = Get-DnsServerForwarder -ErrorAction SilentlyContinue
+                    $existingForwarders = @(
+                        if ($forwarderConfiguration) {
+                            $forwarderConfiguration.IPAddress | ForEach-Object { $_.IPAddressToString }
+                        }
+                    )
+                    if ($DnsForwarder -notin $existingForwarders) {
                         Add-DnsServerForwarder -IPAddress $DnsForwarder -PassThru | Out-Null
                     }
                     $externalDnsProbe = 'management.azure.com'

@@ -88,6 +88,13 @@ Add-ReadinessCheck `
     -Detail $(if ($nestedVmVolume) { "V: $($nestedVmVolume.FileSystem), label $($nestedVmVolume.FileSystemLabel)" } else { 'V: not found' })
 
 if ($nestedVmVolume) {
+    # ReFS starves dynamically expanding VHDX writes badly enough that DISM deadlocks against a mounted
+    # VHDX, so a volume left over from an older bootstrap has to be caught before any image conversion.
+    Add-ReadinessCheck `
+        -Name 'Nested VM volume filesystem' `
+        -Passed ($nestedVmVolume.FileSystem -eq 'NTFS') `
+        -Detail "$($nestedVmVolume.FileSystem) (NTFS required; reformat V: if this reports ReFS)"
+
     # V: is dedicated to the lab, so capacity is checked instead of free space to keep resumes unblocked.
     Add-ReadinessCheck `
         -Name 'Nested VM volume capacity' `

@@ -803,8 +803,14 @@ exit /b 0
                         -ErrorAction SilentlyContinue
 
                     if (-not $ouExists -or -not $lcmUser) {
-                        if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
-                            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
+                        # PowerShellGet raises an interactive bootstrap prompt when the provider binary is
+                        # older than the version it requires, and nothing can answer it over PowerShell Direct.
+                        $installedProvider = @(
+                            Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue |
+                                Where-Object { $_.Version -ge [version]'2.8.5.208' }
+                        )
+                        if ($installedProvider.Count -eq 0) {
+                            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.208 -Force -ForceBootstrap | Out-Null
                         }
                         $originalPolicy = (Get-PSRepository -Name PSGallery).InstallationPolicy
                         try {

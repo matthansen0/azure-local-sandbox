@@ -40,7 +40,7 @@ All outer and nested CIDRs must remain disjoint.
 ## Automation Stages
 
 1. Deploy the Azure resource group, VNet, NAT Gateway, Bastion, host VM, identity, disks, and monitoring.
-2. Install Hyper-V, combine data disks into a ReFS volume, and create host switches.
+2. Install Hyper-V, combine data disks into an NTFS volume, and create host switches.
 3. Verify or convert operating-system media.
 4. Create `AzLMGMT`, `AzLHOST1`, and `AzLHOST2` with differencing disks.
 5. Install offline Windows features and first-boot specialization.

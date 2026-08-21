@@ -290,8 +290,11 @@ function Initialize-NestedVmStorage {
 
     $volume = $partition | Get-Volume -ErrorAction SilentlyContinue
     if (-not $volume.FileSystem) {
+        # NTFS, not ReFS: every disk in this lab is a dynamically expanding or differencing VHDX, and
+        # ReFS redirects each allocating write through copy-on-write metadata. That collapses throughput
+        # and makes vhdmp time out mid-apply (event 129), which deadlocks DISM against a mounted VHDX.
         $partition | Format-Volume `
-            -FileSystem ReFS `
+            -FileSystem NTFS `
             -AllocationUnitSize 65536 `
             -NewFileSystemLabel $VolumeLabel `
             -Confirm:$false | Out-Null

@@ -389,7 +389,7 @@
       "x": 816,
       "y": 391,
       "strokeColor": "#475569",
-      "text": "Windows Server 2025 | Standard_E32s_v5/v6 | Hyper-V | 8 Premium SSDs -> ReFS V:",
+      "text": "Windows Server 2025 | Standard_E32s_v5/v6 | Hyper-V | 8 Premium SSDs -> NTFS V:",
       "fontSize": 17,
       "createdAt": "2026-07-28T17:32:52.230Z",
       "updatedAt": "2026-07-28T17:32:52.230Z",

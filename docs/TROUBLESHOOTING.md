@@ -66,8 +66,39 @@ Confirm:
 - The selected SKU exposes nested virtualization.
 - Host RAM covers the configured topology plus a 16 GiB host reserve, which is 236 GiB for the default profile.
 - `V:` provides at least 1.5 TiB of capacity.
+- `V:` is formatted NTFS.
 - Hyper-V, `InternalSwitch`, `InternalNAT`, and host NAT are present.
 - `C:\AzureLocalSandbox\Source` contains the staged scripts and configuration.
+
+### Image conversion stalls at ~94% and DISM stops using CPU
+
+Bootstrap versions before this fix formatted `V:` as ReFS. Every disk this lab creates is a dynamically
+expanding or differencing VHDX, and ReFS routes each allocating write through copy-on-write metadata.
+Throughput collapses, `vhdmp` logs event 129 (`Reset to device ... was issued`) in the System log, and
+the DISM apply deadlocks against the mounted VHDX with no CPU and no disk I/O.
+
+Confirm the filesystem and the resets:
+
+```powershell
+Get-Volume -DriveLetter V | Select-Object FileSystem
+Get-WinEvent -LogName System -MaxEvents 400 |
+  Where-Object { $_.ProviderName -eq 'vhdmp' -and $_.Id -eq 129 }
+```
+
+`Test-HostReadiness.ps1` now fails on a ReFS `V:`. Reformat it before converting media. This destroys
+every nested VM and parent image on the volume, so only do it on a lab that is being rebuilt:
+
+```powershell
+Get-VM | Where-Object State -ne 'Off' | Stop-VM -Force
+Get-VM | Remove-VM -Force
+Get-ChildItem V:\VHDs -Filter *.vhdx | ForEach-Object { Dismount-VHD -Path $_.FullName -ErrorAction SilentlyContinue }
+Format-Volume -DriveLetter V -FileSystem NTFS -AllocationUnitSize 65536 -NewFileSystemLabel 'NestedVMs' -Confirm:$false
+New-Item -Path 'V:\VMs', 'V:\VHDs' -ItemType Directory -Force
+Remove-Item C:\AzureLocalSandbox\State\images.json -ErrorAction SilentlyContinue
+```
+
+A DISM process wedged by the ReFS timeouts cannot always be killed, because its threads are stuck in a
+kernel wait. Reboot `LocalBox-Client` if `Dism.exe` still holds the VHDX after `Stop-Process -Force`.
 
 Rerun:
 

@@ -50,6 +50,18 @@ function Write-Step {
     Write-Information "[$((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))] $Message" -InformationAction Continue
 }
 
+function Install-NuGetProvider {
+    # PowerShellGet raises an interactive bootstrap prompt when the provider binary is older than the
+    # version it requires, which deadlocks an unattended run.
+    $installedProvider = @(
+        Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue |
+            Where-Object { $_.Version -ge [version]'2.8.5.208' }
+    )
+    if ($installedProvider.Count -eq 0) {
+        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.208 -Force -ForceBootstrap | Out-Null
+    }
+}
+
 function Install-RequiredAzModule {
     param(
         [Parameter(Mandatory)][string]$Name,
@@ -61,9 +73,7 @@ function Install-RequiredAzModule {
     }
 
     Write-Step "Installing PowerShell module $Name $Version from PSGallery..."
-    if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
-        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
-    }
+    Install-NuGetProvider
     $originalPolicy = (Get-PSRepository -Name PSGallery).InstallationPolicy
     try {
         if ($originalPolicy -ne 'Trusted') {

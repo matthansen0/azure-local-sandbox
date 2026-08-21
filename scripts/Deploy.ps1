@@ -69,6 +69,68 @@ function Invoke-AzureCli {
     return $output
 }
 
+function Get-InstalledBicepVersion {
+    $output = & $script:AzureCliPath @('bicep', 'version') 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        return $null
+    }
+    if (($output -join ' ') -match '(\d+\.\d+\.\d+)') {
+        return $Matches[1]
+    }
+
+    return $null
+}
+
+function Install-BicepCli {
+    param(
+        [Parameter(Mandatory)][string]$Version,
+        [int]$MaxAttempts = 3
+    )
+
+    # When this is set, az resolves Bicep from PATH and silently ignores --version.
+    $binaryFromPath = & $script:AzureCliPath @(
+        'config', 'get', 'bicep.use_binary_from_path',
+        '--query', 'value', '--output', 'tsv'
+    ) 2>$null
+    $binaryFromPath = ($binaryFromPath -join '').Trim()
+    if ($LASTEXITCODE -eq 0 -and $binaryFromPath -and $binaryFromPath -notmatch '^(?i:false)$') {
+        throw "Azure CLI is configured with bicep.use_binary_from_path='$binaryFromPath', so it uses whatever Bicep is on PATH instead of the pinned $Version. Run 'az config set bicep.use_binary_from_path=false' and retry."
+    }
+
+    $installed = Get-InstalledBicepVersion
+    if ($installed -eq $Version) {
+        Write-Step "Azure CLI Bicep $Version is already installed."
+        return
+    }
+
+    $lastError = $null
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        Write-Step "Installing Azure CLI Bicep $Version (attempt $attempt of $MaxAttempts)..."
+        $output = & $script:AzureCliPath @(
+            'bicep', 'install',
+            '--version', "v$Version",
+            '--only-show-errors'
+        ) 2>&1
+        if ($LASTEXITCODE -eq 0 -and (Get-InstalledBicepVersion) -eq $Version) {
+            return
+        }
+
+        $lastError = ($output -join [Environment]::NewLine).Trim()
+        Write-Warning "Bicep install attempt $attempt failed: $lastError"
+        if ($attempt -lt $MaxAttempts) {
+            Start-Sleep -Seconds ([math]::Pow(2, $attempt) * 5)
+        }
+    }
+
+    $guidance = @(
+        "Unable to install Azure CLI Bicep $Version after $MaxAttempts attempts."
+        "Azure CLI downloads it from https://github.com/Azure/bicep/releases/tag/v$Version into its own directory (~/.azure/bin), so a proxy, TLS inspection, or file permissions on that directory will block it."
+        "Install it manually with 'az bicep install --version v$Version', then rerun this script; it skips the install when the pinned version is already present."
+        "Last error: $lastError"
+    )
+    throw ($guidance -join [Environment]::NewLine)
+}
+
 function Register-SubscriptionFeature {
     param(
         [Parameter(Mandatory)][string]$Namespace,
@@ -277,13 +339,7 @@ if ($dependencies.SchemaVersion -ne 1) {
     throw "Unsupported dependency schema '$($dependencies.SchemaVersion)'."
 }
 
-Write-Step "Installing Azure CLI Bicep $($dependencies.Bicep.Version)..."
-Invoke-AzureCli `
-    -Arguments @(
-        'bicep', 'install',
-        '--version', "v$($dependencies.Bicep.Version)",
-        '--only-show-errors'
-    ) | Out-Null
+Install-BicepCli -Version $dependencies.Bicep.Version
 $bicepVersion = Invoke-AzureCli -Arguments @('bicep', 'version')
 if (($bicepVersion -join ' ') -notmatch "\b$([regex]::Escape($dependencies.Bicep.Version))\b") {
     throw "Azure CLI Bicep version '$($dependencies.Bicep.Version)' is required; received '$($bicepVersion -join ' ')'."

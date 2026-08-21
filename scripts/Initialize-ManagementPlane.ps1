@@ -841,6 +841,39 @@ exit /b 0
                         }
                     }
 
+                    # Promotion can complete without the forward lookup zone when the DNS server starts
+                    # before AD DS signals initial synchronisation, leaving the domain unresolvable.
+                    if (-not (Get-DnsServerZone -Name $Configuration.Domain.Fqdn -ErrorAction SilentlyContinue)) {
+                        Add-DnsServerPrimaryZone `
+                            -Name $Configuration.Domain.Fqdn `
+                            -ReplicationScope Domain `
+                            -DynamicUpdate Secure
+                        Restart-Service -Name Netlogon -Force
+                        Register-DnsClient
+                    }
+
+                    $locatorRecord = "_ldap._tcp.dc._msdcs.$($Configuration.Domain.Fqdn)"
+                    $zoneDeadline = (Get-Date).AddMinutes(5)
+                    while ($true) {
+                        $startOfAuthority = Resolve-DnsName `
+                            -Name $Configuration.Domain.Fqdn `
+                            -Type SOA `
+                            -Server 127.0.0.1 `
+                            -ErrorAction SilentlyContinue
+                        $serviceLocator = Resolve-DnsName `
+                            -Name $locatorRecord `
+                            -Type SRV `
+                            -Server 127.0.0.1 `
+                            -ErrorAction SilentlyContinue
+                        if ($startOfAuthority -and $serviceLocator) {
+                            break
+                        }
+                        if ((Get-Date) -ge $zoneDeadline) {
+                            throw "'$($Configuration.Domain.Fqdn)' did not publish SOA and '$locatorRecord' records on '$env:COMPUTERNAME' within 5 minutes."
+                        }
+                        Start-Sleep -Seconds 15
+                    }
+
                     # A forest with no forwarders reports IPAddress as $null rather than an empty
                     # array, and piping $null runs the body once with $_ unset.
                     $forwarderConfiguration = Get-DnsServerForwarder -ErrorAction SilentlyContinue
@@ -957,7 +990,24 @@ exit /b 0
 
                 $adapter = Get-NetAdapter -Name 'FABRIC'
                 Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses @($DomainControllerIp)
-                $domainResolution = Resolve-DnsName -Name $DomainFqdn -Type SOA -ErrorAction Stop
+
+                # The node cached NXDOMAIN for the domain while it still pointed at a public resolver.
+                Clear-DnsClientCache
+
+                $resolutionDeadline = (Get-Date).AddMinutes(5)
+                $domainResolution = $null
+                while (-not $domainResolution) {
+                    $domainResolution = Resolve-DnsName -Name $DomainFqdn -Type SOA -ErrorAction SilentlyContinue
+                    if ($domainResolution) {
+                        break
+                    }
+                    if ((Get-Date) -ge $resolutionDeadline) {
+                        throw "'$env:COMPUTERNAME' could not resolve '$DomainFqdn' through '$DomainControllerIp' within 5 minutes."
+                    }
+                    Start-Sleep -Seconds 15
+                    Clear-DnsClientCache
+                }
+
                 [pscustomobject]@{
                     Name       = $env:COMPUTERNAME
                     DnsServers = @((Get-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4).ServerAddresses)

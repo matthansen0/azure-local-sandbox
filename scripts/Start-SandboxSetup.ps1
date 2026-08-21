@@ -247,11 +247,17 @@ if (-not $reuseImages) {
     if ($WindowsServerImageIndex -eq 0 -or $AzureLocalImageIndex -eq 0) {
         Write-Information '' -InformationAction Continue
         Write-Information 'Available installation images:' -InformationAction Continue
-        $availableImages = @(& $converterPath `
+        $listImagesJsonPath = Join-Path $env:TEMP 'AzureLocalSandboxIsoImages.json'
+        Remove-Item -LiteralPath $listImagesJsonPath -Force -ErrorAction SilentlyContinue
+        & $converterPath `
             -WindowsServerIsoPath $WindowsServerIsoPath `
             -AzureLocalIsoPath $AzureLocalIsoPath `
-            -ListImages)
-        $availableImages | Format-Table -AutoSize | Out-Host
+            -ListImagesJsonPath $listImagesJsonPath `
+            -ListImages
+        if (-not (Test-Path -LiteralPath $listImagesJsonPath)) {
+            throw "The image list was not found at '$listImagesJsonPath'."
+        }
+        $availableImages = @(Get-Content -LiteralPath $listImagesJsonPath -Raw | ConvertFrom-Json)
 
         if ($WindowsServerImageIndex -eq 0) {
             Write-Information 'Windows Server 2025 requires the index whose name ends in "(Desktop Experience)". A Server Core index will be rejected during conversion.' -InformationAction Continue

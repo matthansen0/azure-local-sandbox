@@ -163,10 +163,18 @@ Describe 'Credential and artifact contract' {
 
     It 'guides and validates the Windows Server Desktop Experience image index' {
         $guidedSetup = Get-Content (Join-Path $repoRoot 'scripts/Start-SandboxSetup.ps1') -Raw
+        $isoConverter = Get-Content (Join-Path $repoRoot 'scripts/Convert-LabIsoMedia.ps1') -Raw
 
         $guidedSetup | Should -Match '\(Desktop Experience\)'
         $guidedSetup | Should -Match "RequiredNamePattern\s+'\\\(Desktop Experience\\\)'"
         $guidedSetup | Should -Match 'function Read-ImageIndex'
+
+        # The image list must cross the Convert-LabIsoMedia.ps1 -> Start-SandboxSetup.ps1 boundary as a
+        # JSON file, not captured stdout, because Storage-module cmdlets can leak stray objects into the
+        # success stream and silently corrupt a captured array.
+        $isoConverter | Should -Match 'ListImagesJsonPath'
+        $guidedSetup | Should -Not -Match '@\(&\s*\$converterPath'
+        $guidedSetup | Should -Match 'ConvertFrom-Json'
     }
 
     It 'pins reviewed external dependencies' {

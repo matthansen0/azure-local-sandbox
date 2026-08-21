@@ -35,6 +35,8 @@ param(
 
     [string]$StateFile = 'C:\AzureLocalSandbox\State\images.json',
 
+    [string]$ListImagesJsonPath = (Join-Path $env:TEMP 'AzureLocalSandboxIsoImages.json'),
+
     [switch]$ListImages,
 
     [switch]$Force
@@ -300,9 +302,7 @@ try {
     $azureLocalInstallImage = Get-IsoInstallImage -IsoPath $AzureLocalIsoPath
 
     if ($ListImages) {
-        # Returned (not Format-Table'd) so callers such as Start-SandboxSetup.ps1 can validate the
-        # chosen index against ImageName; the console still auto-formats this as a table when run directly.
-        return @(
+        $imageList = @(
             $windowsInstallImage.Images | ForEach-Object {
                 [pscustomobject]@{
                     Media      = 'WindowsServer'
@@ -320,6 +320,13 @@ try {
                 }
             }
         )
+        $imageList | Format-Table -AutoSize
+
+        # Written to disk rather than returned: Storage-module cmdlets (Mount-DiskImage, etc.) can emit
+        # extra objects to the success stream, which would silently corrupt a caller capturing this
+        # script's pipeline output instead of reading a file.
+        $imageList | ConvertTo-Json | Set-Content -LiteralPath $ListImagesJsonPath -Encoding UTF8
+        return
     }
 
     if (-not $WindowsServerIsoSha256 -or -not $AzureLocalIsoSha256) {

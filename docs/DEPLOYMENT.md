@@ -156,6 +156,14 @@ Set-Location C:\AzureLocalSandbox\Source
 ./scripts/Update-SandboxSource.ps1
 ```
 
+If the command is not found because the bastion was created before the updater was added, bootstrap it once with:
+
+```powershell
+$updater = Join-Path $env:TEMP 'Update-SandboxSource.ps1'
+Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/matthansen0/azure-local-sandbox/main/scripts/Update-SandboxSource.ps1' -OutFile $updater
+& $updater -SourceRoot 'C:\AzureLocalSandbox\Source'
+```
+
 The updater downloads the `main` branch, overlays `C:\AzureLocalSandbox\Source`, and preserves `C:\AzureLocalSandbox\Media`, `C:\AzureLocalSandbox\State`, and `C:\AzureLocalSandbox\Artifacts`. Rerun the command after each pushed change, then continue with the normal command-line workflow below.
 
 List ISO image indexes:

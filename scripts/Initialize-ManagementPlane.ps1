@@ -666,6 +666,19 @@ exit /b 0
                         $routingService.WaitForStatus('Running', [timespan]::FromSeconds(120))
                     }
 
+                    # Azure Local validation pings the gateway from every address in the infra pool, and
+                    # the built-in echo rules are disabled. Match by name because display names localise.
+                    if (-not (Get-NetFirewallRule -Name 'AzureLocalSandbox-ICMPv4-In' -ErrorAction SilentlyContinue)) {
+                        New-NetFirewallRule `
+                            -Name 'AzureLocalSandbox-ICMPv4-In' `
+                            -DisplayName 'Azure Local Sandbox ICMPv4 Echo Request' `
+                            -Direction Inbound `
+                            -Protocol ICMPv4 `
+                            -IcmpType 8 `
+                            -Action Allow `
+                            -Profile Any | Out-Null
+                    }
+
                     Enable-PSRemoting -Force -SkipNetworkProfileCheck
 
                     [pscustomobject]@{

@@ -863,12 +863,21 @@ exit /b 0
 
                     $domainDistinguishedName = ($Configuration.Domain.Fqdn.Split('.') | ForEach-Object { "DC=$_" }) -join ','
                     $ouDistinguishedName = "OU=$($Configuration.Domain.DeploymentOuName),$domainDistinguishedName"
-                    $ouExists = Get-ADOrganizationalUnit `
-                        -Identity $ouDistinguishedName `
-                        -ErrorAction SilentlyContinue
-                    $lcmUser = Get-ADUser `
-                        -Identity $Configuration.Domain.DeploymentUserName `
-                        -ErrorAction SilentlyContinue
+
+                    # -Identity raises a terminating error for a missing object, so -ErrorAction cannot suppress it.
+                    $ouExists = $null
+                    try {
+                        $ouExists = Get-ADOrganizationalUnit -Identity $ouDistinguishedName -ErrorAction Stop
+                    }
+                    catch [Microsoft.ActiveDirectory.Management.ADIdentityNotFoundException] {
+                    }
+
+                    $lcmUser = $null
+                    try {
+                        $lcmUser = Get-ADUser -Identity $Configuration.Domain.DeploymentUserName -ErrorAction Stop
+                    }
+                    catch [Microsoft.ActiveDirectory.Management.ADIdentityNotFoundException] {
+                    }
 
                     if (-not $ouExists -or -not $lcmUser) {
                         # PowerShellGet raises an interactive bootstrap prompt when the provider binary is

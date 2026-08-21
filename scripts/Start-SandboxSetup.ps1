@@ -62,6 +62,35 @@ function Read-Choice {
     } while ($true)
 }
 
+function Read-ImageIndex {
+    param(
+        [Parameter(Mandatory)][string]$Prompt,
+        [Parameter(Mandatory)][object[]]$AvailableImages,
+        [string]$RequiredNamePattern
+    )
+
+    do {
+        $rawAnswer = (Read-Host $Prompt).Trim()
+        $parsedIndex = 0
+        if (-not [int]::TryParse($rawAnswer, [ref]$parsedIndex)) {
+            Write-Warning "'$rawAnswer' is not a number."
+            continue
+        }
+
+        $selectedImage = $AvailableImages | Where-Object ImageIndex -eq $parsedIndex
+        if (-not $selectedImage) {
+            Write-Warning "Index $parsedIndex is not in the list above."
+            continue
+        }
+        if ($RequiredNamePattern -and $selectedImage.ImageName -notmatch $RequiredNamePattern) {
+            Write-Warning "'$($selectedImage.ImageName)' does not match the required pattern. Choose the index whose name ends in '(Desktop Experience)'."
+            continue
+        }
+
+        return $parsedIndex
+    } while ($true)
+}
+
 function Select-IsoFile {
     param(
         [Parameter(Mandatory)][string]$Title,
@@ -218,16 +247,23 @@ if (-not $reuseImages) {
     if ($WindowsServerImageIndex -eq 0 -or $AzureLocalImageIndex -eq 0) {
         Write-Information '' -InformationAction Continue
         Write-Information 'Available installation images:' -InformationAction Continue
-        & $converterPath `
+        $availableImages = @(& $converterPath `
             -WindowsServerIsoPath $WindowsServerIsoPath `
             -AzureLocalIsoPath $AzureLocalIsoPath `
-            -ListImages
+            -ListImages)
+        $availableImages | Format-Table -AutoSize | Out-Host
 
         if ($WindowsServerImageIndex -eq 0) {
-            $WindowsServerImageIndex = [int](Read-Host 'Windows Server 2025 image index')
+            Write-Information 'Windows Server 2025 requires the index whose name ends in "(Desktop Experience)". A Server Core index will be rejected during conversion.' -InformationAction Continue
+            $WindowsServerImageIndex = Read-ImageIndex `
+                -Prompt 'Windows Server 2025 image index (Desktop Experience)' `
+                -AvailableImages @($availableImages | Where-Object Media -eq 'WindowsServer') `
+                -RequiredNamePattern '\(Desktop Experience\)'
         }
         if ($AzureLocalImageIndex -eq 0) {
-            $AzureLocalImageIndex = [int](Read-Host 'Azure Local image index')
+            $AzureLocalImageIndex = Read-ImageIndex `
+                -Prompt 'Azure Local image index' `
+                -AvailableImages @($availableImages | Where-Object Media -eq 'AzureLocal')
         }
     }
 

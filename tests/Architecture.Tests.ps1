@@ -161,6 +161,14 @@ Describe 'Credential and artifact contract' {
         $bootstrap | Should -Match 'Start-SandboxSetup\.ps1'
     }
 
+    It 'guides and validates the Windows Server Desktop Experience image index' {
+        $guidedSetup = Get-Content (Join-Path $repoRoot 'scripts/Start-SandboxSetup.ps1') -Raw
+
+        $guidedSetup | Should -Match '\(Desktop Experience\)'
+        $guidedSetup | Should -Match "RequiredNamePattern\s+'\\\(Desktop Experience\\\)'"
+        $guidedSetup | Should -Match 'function Read-ImageIndex'
+    }
+
     It 'pins reviewed external dependencies' {
         $dependencies.SchemaVersion | Should -Be 1
         $dependencies.AzureLocalQuickstart.Commit | Should -Match '^[0-9a-f]{40}$'

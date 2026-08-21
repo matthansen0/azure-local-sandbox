@@ -298,7 +298,9 @@ try {
     $azureLocalInstallImage = Get-IsoInstallImage -IsoPath $AzureLocalIsoPath
 
     if ($ListImages) {
-        @(
+        # Returned (not Format-Table'd) so callers such as Start-SandboxSetup.ps1 can validate the
+        # chosen index against ImageName; the console still auto-formats this as a table when run directly.
+        return @(
             $windowsInstallImage.Images | ForEach-Object {
                 [pscustomobject]@{
                     Media      = 'WindowsServer'
@@ -315,8 +317,7 @@ try {
                     Version    = $_.Version
                 }
             }
-        ) | Format-Table -AutoSize
-        return
+        )
     }
 
     if (-not $WindowsServerIsoSha256 -or -not $AzureLocalIsoSha256) {

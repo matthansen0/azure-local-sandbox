@@ -196,6 +196,19 @@ $readinessResults = foreach ($nodeConfiguration in $nodeConfigurations) {
             Restart-Service W32Time
             w32tm.exe /resync /force | Out-Null
 
+            # A failed resync leaves the source as the CMOS clock, which only surfaces as an Azure
+            # Local validation failure some forty minutes later.
+            $timeDeadline = (Get-Date).AddMinutes(5)
+            $timeSource = w32tm.exe /query /source
+            while ($timeSource -match 'Local CMOS Clock') {
+                if ((Get-Date) -ge $timeDeadline) {
+                    throw "'$env:COMPUTERNAME' did not synchronise time with '$DomainControllerIp' and is still using the local CMOS clock."
+                }
+                Start-Sleep -Seconds 15
+                w32tm.exe /resync /force 2>&1 | Out-Null
+                $timeSource = w32tm.exe /query /source
+            }
+
             # The Azure Local image stages AzureEdgeBootstrap through a scheduled task, so the Arc
             # installer is absent until that task has run at least once.
             if (-not (Get-Command 'Invoke-AzStackHciArcInitialization' -ErrorAction SilentlyContinue)) {

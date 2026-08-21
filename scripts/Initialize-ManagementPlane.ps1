@@ -960,6 +960,14 @@ exit /b 0
                             -AsHciOUName $ouDistinguishedName
                     }
 
+                    # Promotion leaves the NtpServer provider disabled, so the domain controller keeps
+                    # good time but never answers client requests, and every node falls back to its
+                    # CMOS clock, which Azure Local validation rejects.
+                    $ntpServerProvider = 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\TimeProviders\NtpServer'
+                    if ((Get-ItemProperty -Path $ntpServerProvider -Name 'Enabled' -ErrorAction SilentlyContinue).Enabled -ne 1) {
+                        Set-ItemProperty -Path $ntpServerProvider -Name 'Enabled' -Value 1 -Type DWord
+                    }
+
                     w32tm.exe /config /manualpeerlist:'time.windows.com,0x8' /syncfromflags:manual /reliable:yes /update | Out-Null
                     Restart-Service W32Time
                     w32tm.exe /resync /force | Out-Null

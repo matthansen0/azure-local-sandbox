@@ -220,6 +220,10 @@ function Convert-InstallImageToVhdx {
             $InstallImage.InstallImagePath, $ImageIndex, $windowsDriveLetter, $dismLogPath
         $dismProcess = Start-Process -FilePath 'dism.exe' -ArgumentList $dismArguments -NoNewWindow -PassThru
 
+        # Windows PowerShell 5.1 releases the native handle behind a -PassThru process once the child
+        # exits, and ExitCode then reads back as $null. Caching the handle keeps the exit code readable.
+        $null = $dismProcess.Handle
+
         $applyStopwatch = [Diagnostics.Stopwatch]::StartNew()
         $lastProcessorSeconds = -1
         $lastAppliedBytes = -1L
@@ -248,7 +252,8 @@ function Convert-InstallImageToVhdx {
         }
         $applyStopwatch.Stop()
 
-        $dismProcess.Refresh()
+        # The parameterless overload waits for the process to be fully reaped, not just signalled.
+        $dismProcess.WaitForExit()
         $dismExitCode = $dismProcess.ExitCode
         if ($dismExitCode -ne 0) {
             $dismLogTail = if (Test-Path -LiteralPath $dismLogPath) {
@@ -257,7 +262,8 @@ function Convert-InstallImageToVhdx {
             else {
                 'No DISM log was produced.'
             }
-            throw "DISM failed to apply image index ${ImageIndex} (exit code $dismExitCode). Last log lines from ${dismLogPath}:$([Environment]::NewLine)$dismLogTail"
+            $reportedExitCode = if ($null -eq $dismExitCode) { '<unavailable>' } else { $dismExitCode }
+            throw "DISM failed to apply image index ${ImageIndex} (exit code $reportedExitCode). Last log lines from ${dismLogPath}:$([Environment]::NewLine)$dismLogTail"
         }
 
         Write-Step "Applied image index $ImageIndex in $($applyStopwatch.Elapsed.ToString('hh\:mm\:ss'))."

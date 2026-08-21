@@ -79,16 +79,20 @@ Deploy:
 ./scripts/Deploy.ps1 `
   -Mode Deploy `
   -Location centralus `
-  -AzureLocalLocation centralus
+  -AzureLocalLocation eastus
 ```
 
-Use `-Location` and `-AzureLocalLocation` to control the host and Arc/cluster regions independently:
+The host region and the Azure Local region are independent. `-Location` places the outer VM and
+its supporting resources, and `-AzureLocalLocation` places the Arc machines and the cluster.
+Azure Local is only offered in the regions listed under `AzureLocal.SupportedRegions` in
+[config/dependencies.psd1](../config/dependencies.psd1), and `centralus` is not one of them, so a
+host region is not necessarily usable as the Azure Local region:
 
 ```powershell
 ./scripts/Deploy.ps1 `
   -Mode Deploy `
   -Location westus3 `
-  -AzureLocalLocation centralus
+  -AzureLocalLocation eastus
 ```
 
 ### Azure Bastion SKU

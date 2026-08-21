@@ -62,7 +62,7 @@ $env:AZURE_LOCAL_SANDBOX_ADMIN_PASSWORD = '<strong-password>'
 ./scripts/Deploy.ps1 `
   -Mode Deploy `
   -Location centralus `
-  -AzureLocalLocation centralus
+  -AzureLocalLocation eastus
 ```
 
 The deployment installs Hyper-V, creates storage and networking, stages the exact

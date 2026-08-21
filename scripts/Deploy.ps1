@@ -339,6 +339,11 @@ if ($dependencies.SchemaVersion -ne 1) {
     throw "Unsupported dependency schema '$($dependencies.SchemaVersion)'."
 }
 
+$supportedAzureLocalRegions = @($dependencies.AzureLocal.SupportedRegions)
+if ($AzureLocalLocation -notin $supportedAzureLocalRegions) {
+    throw "Azure Local does not support the region '$AzureLocalLocation'. Choose one of: $($supportedAzureLocalRegions -join ', ')."
+}
+
 Install-BicepCli -Version $dependencies.Bicep.Version
 $bicepVersion = Invoke-AzureCli -Arguments @('bicep', 'version')
 if (($bicepVersion -join ' ') -notmatch "\b$([regex]::Escape($dependencies.Bicep.Version))\b") {

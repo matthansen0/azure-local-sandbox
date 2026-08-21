@@ -29,6 +29,23 @@
         Sku       = '2025-datacenter-g2'
     }
 
+    AzureLocal = @{
+        # The Arc bootstrap service rejects any other region, and it only reports this once the
+        # nodes are already built and registering, hours into a deployment.
+        SupportedRegions = @(
+            'australiaeast'
+            'canadacentral'
+            'centralindia'
+            'eastus'
+            'eastus2euap'
+            'germanywestcentral'
+            'japaneast'
+            'southcentralus'
+            'southeastasia'
+            'westeurope'
+        )
+    }
+
     AzureBastion = @{
         # Regions offering the free Developer SKU, from includes/bastion-developer-regions.md in MicrosoftDocs/azure-docs.
         # Deploy.ps1 falls back to the Standard SKU for any other region, and also if Azure rejects the Developer SKU.

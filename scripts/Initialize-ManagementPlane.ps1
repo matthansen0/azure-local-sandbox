@@ -972,11 +972,39 @@ exit /b 0
                     Restart-Service W32Time
                     w32tm.exe /resync /force | Out-Null
 
+                    # The cluster name object does not exist until deployment creates it, so the witness
+                    # share is granted to Domain Computers, which both it and the nodes belong to.
+                    $witnessSharePath = $Configuration.Cluster.WitnessPath
+                    $witnessShareName = $Configuration.Cluster.WitnessShareName
+                    New-Item -Path $witnessSharePath -ItemType Directory -Force | Out-Null
+
+                    $witnessGrantee = "$($Configuration.Domain.NetBiosName)\Domain Computers"
+                    $witnessShare = Get-SmbShare -Name $witnessShareName -ErrorAction SilentlyContinue
+                    if (-not $witnessShare) {
+                        New-SmbShare `
+                            -Name $witnessShareName `
+                            -Path $witnessSharePath `
+                            -FullAccess $witnessGrantee | Out-Null
+                    }
+                    else {
+                        Grant-SmbShareAccess `
+                            -Name $witnessShareName `
+                            -AccountName $witnessGrantee `
+                            -AccessRight Full `
+                            -Force | Out-Null
+                    }
+
+                    $witnessAcl = Get-Acl -Path $witnessSharePath
+                    $witnessAcl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+                        $witnessGrantee, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')))
+                    Set-Acl -Path $witnessSharePath -AclObject $witnessAcl
+
                     [pscustomobject]@{
                         Name                = $env:COMPUTERNAME
                         Domain              = (Get-ADDomain).DNSRoot
                         OuDistinguishedName = $ouDistinguishedName
                         LcmUser             = $Configuration.Domain.DeploymentUserName
+                        WitnessShare        = "\\$env:COMPUTERNAME\$witnessShareName"
                         Result              = 'DomainReady'
                     }
                 }

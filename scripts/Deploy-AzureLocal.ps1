@@ -133,8 +133,8 @@ function Get-AzureDeploymentParameter {
         location                          = $Context.azureLocation
         tenantId                          = $Context.tenantId
         # A cloud witness authenticates with the storage account key, so it cannot be used where
-        # shared key access is disallowed. The cluster is deployed without a witness and given a
-        # file share witness afterwards by Set-ClusterFileShareWitness.ps1.
+        # shared key access is disallowed. This value only drives the template's own variables; the
+        # deployment data is patched to a FileShare witness once the template hash is verified.
         witnessType                       = 'No Witness'
         clusterWitnessStorageAccountName  = "azlsb${suffix}wit"
         localAdminUserName                = $LocalCredential.UserName
@@ -380,6 +380,22 @@ if (-not $PSBoundParameters.ContainsKey('TemplateUri') -and
     $templateHash -ne $quickstartDependency.Sha256) {
     throw "Pinned Quickstart template checksum mismatch. Expected $($quickstartDependency.Sha256); received $templateHash."
 }
+
+# deploymentSettings accepts a FileShare witness, but the template hardcodes an empty witnessPath and
+# only ever emits Cloud or nothing, so the reviewed revision is patched after its hash is verified.
+$witnessUncPath = "\\{0}.{1}\{2}" -f `
+    $configuration.Domain.DomainControllerName,
+    $configuration.Domain.Fqdn,
+    $configuration.Cluster.WitnessShareName
+$templateText = Get-Content -LiteralPath $templatePath -Raw
+$patchedTemplateText = $templateText.
+    Replace('"witnessType": "[variables(''witnessTypeVar'')]"', '"witnessType": "FileShare"').
+    Replace('"witnessPath": ""', ('"witnessPath": "{0}"' -f $witnessUncPath.Replace('\', '\\')))
+if ($patchedTemplateText -eq $templateText) {
+    throw 'The maintained template no longer exposes the witnessType and witnessPath fields this deployment patches.'
+}
+Set-Content -LiteralPath $templatePath -Value $patchedTemplateText -Encoding UTF8
+Write-Step "Cluster witness set to the file share '$witnessUncPath'."
 
 $validationDeploymentName = 'azure-local-validate'
 if ($Mode -eq 'Deploy') {

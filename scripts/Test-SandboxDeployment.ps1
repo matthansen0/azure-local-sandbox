@@ -79,9 +79,6 @@ else {
     @('AzureLocalValidated', 'AzureLocalDeployed')
 }
 Add-StateCheck -Name 'Azure Local cloud' -Path (Join-Path $stateRoot 'azure-local-deployment.json') -ExpectedPhases $deploymentPhases
-if ($RequireAzureLocalDeployment) {
-    Add-StateCheck -Name 'Cluster witness' -Path (Join-Path $stateRoot 'cluster-witness.json') -ExpectedPhases @('ClusterWitnessConfigured')
-}
 
 foreach ($vmConfiguration in @($configuration.VMs)) {
     $virtualMachine = Get-VM -Name $vmConfiguration.Name -ErrorAction SilentlyContinue

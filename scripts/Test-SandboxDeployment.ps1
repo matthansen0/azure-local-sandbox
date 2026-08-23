@@ -79,6 +79,9 @@ else {
     @('AzureLocalValidated', 'AzureLocalDeployed')
 }
 Add-StateCheck -Name 'Azure Local cloud' -Path (Join-Path $stateRoot 'azure-local-deployment.json') -ExpectedPhases $deploymentPhases
+if ($RequireAzureLocalDeployment) {
+    Add-StateCheck -Name 'Cluster witness' -Path (Join-Path $stateRoot 'cluster-witness.json') -ExpectedPhases @('ClusterWitnessConfigured')
+}
 
 foreach ($vmConfiguration in @($configuration.VMs)) {
     $virtualMachine = Get-VM -Name $vmConfiguration.Name -ErrorAction SilentlyContinue
@@ -143,6 +146,35 @@ foreach ($nodeConfiguration in @($configuration.VMs | Where-Object Role -eq 'Azu
     }
     catch {
         Add-CheckResult -Layer 'Azure Local node' -Name $nodeConfiguration.Name -Passed $false -Detail $_.Exception.Message
+    }
+}
+
+if ($RequireAzureLocalDeployment) {
+    $firstNodeName = @($configuration.VMs | Where-Object Role -eq 'AzureLocalNode')[0].Name
+    try {
+        $quorum = Invoke-Command `
+            -VMName $firstNodeName `
+            -Credential $LocalAdministratorCredential `
+            -ArgumentList $configuration.Cluster.Name `
+            -ScriptBlock {
+                param([string]$ClusterName)
+
+                Import-Module FailoverClusters -ErrorAction SilentlyContinue
+                $resource = (Get-ClusterQuorum -Cluster $ClusterName -ErrorAction SilentlyContinue).QuorumResource
+                [pscustomobject]@{
+                    Witness = if ($resource) { [string]$resource.Name } else { 'None' }
+                    State   = if ($resource) { [string]$resource.State } else { 'None' }
+                }
+            }
+
+        Add-CheckResult `
+            -Layer 'Azure Local cluster' `
+            -Name 'Quorum witness' `
+            -Passed ($quorum.Witness -eq 'File Share Witness' -and $quorum.State -eq 'Online') `
+            -Detail "Witness: $($quorum.Witness); state: $($quorum.State)"
+    }
+    catch {
+        Add-CheckResult -Layer 'Azure Local cluster' -Name 'Quorum witness' -Passed $false -Detail $_.Exception.Message
     }
 }
 
@@ -223,7 +255,7 @@ try {
         $clusterResource = Get-AzResource `
             -ResourceGroupName $context.resourceGroupName `
             -ResourceType 'Microsoft.AzureStackHCI/clusters' `
-            -Name 'localboxcluster' `
+            -Name $configuration.Cluster.Name `
             -ExpandProperties `
             -ErrorAction SilentlyContinue
         $clusterProvisioningState = if ($clusterResource) {

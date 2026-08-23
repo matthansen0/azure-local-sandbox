@@ -12,6 +12,13 @@
         DeploymentOuName       = 'hcioudocs'
     }
 
+    Cluster = @{
+        Name             = 'localboxcluster'
+        # A cloud witness needs the storage account key, so the lab hosts its own file share witness.
+        WitnessShareName = 'ClusterWitness'
+        WitnessPath      = 'C:\ClusterWitness'
+    }
+
     Networks = @{
         Management = @{ Prefix = '192.168.1.0/24'; PrefixLength = 24; Gateway = '192.168.1.1' }
         HostNat    = @{ Prefix = '192.168.128.0/24'; PrefixLength = 24; Gateway = '192.168.128.1' }

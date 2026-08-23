@@ -129,10 +129,13 @@ function Get-AzureDeploymentParameter {
         diagnosticStorageAccountName      = "azlsb${suffix}diag"
         logsRetentionInDays               = 30
         storageAccountType                = 'Standard_LRS'
-        clusterName                       = 'localboxcluster'
+        clusterName                       = $Configuration.Cluster.Name
         location                          = $Context.azureLocation
         tenantId                          = $Context.tenantId
-        witnessType                       = 'Cloud'
+        # A cloud witness authenticates with the storage account key, so it cannot be used where
+        # shared key access is disallowed. The cluster is deployed without a witness and given a
+        # file share witness afterwards by Set-ClusterFileShareWitness.ps1.
+        witnessType                       = 'No Witness'
         clusterWitnessStorageAccountName  = "azlsb${suffix}wit"
         localAdminUserName                = $LocalCredential.UserName
         localAdminPassword                = $LocalCredential.Password
@@ -337,46 +340,6 @@ $deletedVaultResponse = Invoke-AzRestMethod `
     -ErrorAction SilentlyContinue
 if ($deletedVaultResponse -and $deletedVaultResponse.StatusCode -eq 200) {
     throw "Key vault '$($deploymentParameters.keyVaultName)' is soft-deleted in '$($context.azureLocation)' and blocks redeployment. Purge it first: az keyvault purge --name $($deploymentParameters.keyVaultName) --location $($context.azureLocation)"
-}
-
-# A cloud witness can only authenticate with the account key, and Azure now creates storage accounts
-# with shared key access disabled, so the account is created up front and the setting confirmed. The
-# quickstart template only offers Cloud or No Witness, and a two node cluster requires a witness.
-$witnessAccountName = $deploymentParameters.clusterWitnessStorageAccountName
-$witnessPath = "/subscriptions/$($context.subscriptionId)/resourceGroups/$($context.resourceGroupName)" +
-    "/providers/Microsoft.Storage/storageAccounts/${witnessAccountName}?api-version=2023-01-01"
-$witnessPayload = @{
-    location   = $context.azureLocation
-    sku        = @{ name = $deploymentParameters.storageAccountType }
-    kind       = 'StorageV2'
-    properties = @{
-        allowSharedKeyAccess     = $true
-        publicNetworkAccess      = 'Enabled'
-        supportsHttpsTrafficOnly = $true
-        minimumTlsVersion        = 'TLS1_2'
-    }
-} | ConvertTo-Json -Depth 6
-
-Write-Step "Preparing the cluster witness storage account '$witnessAccountName'..."
-$witnessCreate = Invoke-AzRestMethod -Method PUT -Path $witnessPath -Payload $witnessPayload
-if ($witnessCreate.StatusCode -ge 400) {
-    throw "Could not create the cluster witness storage account '$witnessAccountName': $($witnessCreate.Content)"
-}
-
-$witnessDeadline = (Get-Date).AddMinutes(5)
-while ($true) {
-    $witnessState = (Invoke-AzRestMethod -Method GET -Path $witnessPath).Content | ConvertFrom-Json
-    if ($witnessState.properties.provisioningState -eq 'Succeeded') {
-        break
-    }
-    if ((Get-Date) -ge $witnessDeadline) {
-        throw "Cluster witness storage account '$witnessAccountName' did not finish provisioning within five minutes."
-    }
-    Start-Sleep -Seconds 10
-}
-
-if (-not $witnessState.properties.allowSharedKeyAccess) {
-    throw "Subscription '$($context.subscriptionId)' does not allow shared key access on storage account '$witnessAccountName', and Azure accepted the request without applying it. The Azure Local cloud witness authenticates with the account key, so deployment cannot proceed until shared key access is permitted on this subscription."
 }
 
 New-Item -Path $ArtifactsPath -ItemType Directory -Force | Out-Null

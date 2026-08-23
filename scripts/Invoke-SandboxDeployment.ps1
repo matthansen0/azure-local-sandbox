@@ -42,7 +42,7 @@ param(
 
     [switch]$Deploy,
 
-    [ValidateSet('Images', 'NestedVMs', 'GuestDisks', 'LevelOne', 'ManagementPlane', 'ArcRegistration', 'Validation', 'Deployment')]
+    [ValidateSet('Images', 'NestedVMs', 'GuestDisks', 'LevelOne', 'ManagementPlane', 'ArcRegistration', 'Validation', 'Deployment', 'ClusterWitness')]
     [string[]]$ForceStage = @(),
 
     [string]$ConfigurationPath = (Join-Path $PSScriptRoot '..\config\lab.psd1')
@@ -285,6 +285,19 @@ if ('GuestDisks' -in $forcedStages -and (Test-Path -LiteralPath (Join-Path $stat
                 -ConfigurationPath $labConfigurationPath `
                 -LocalAdministratorCredential $localCredential `
                 -LcmCredential $deploymentCredential
+        }
+    }
+
+    $clusterWitnessStatePath = Join-Path $stateRoot 'cluster-witness.json'
+    if ($Deploy -and -not (Test-StageComplete `
+        -Stage 'ClusterWitness' `
+        -StatePath $clusterWitnessStatePath `
+        -ExpectedPhases @('ClusterWitnessConfigured'))) {
+        Invoke-Stage -Name 'ClusterWitness' -Action {
+            & (Join-Path $PSScriptRoot 'Set-ClusterFileShareWitness.ps1') `
+                -ConfigurationPath $labConfigurationPath `
+                -LocalAdministratorCredential $localCredential `
+                -DomainAdministratorCredential $domainCredential
         }
     }
 

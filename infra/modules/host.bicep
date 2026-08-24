@@ -159,7 +159,10 @@ resource virtualMachine 'Microsoft.Compute/virtualMachines@2024-07-01' = {
       dataDisks: [for diskIndex in range(0, dataDiskCount): {
         name: '${vmName}-data-${diskIndex}'
         lun: diskIndex
-        caching: 'None'
+        // ReadOnly host caching speeds up the read-heavy phases (parent image hashing, differencing
+        // disk reads) and is Azure's documented setting for Storage Spaces data disks; writes always
+        // bypass the cache, so it does not risk the write-heavy S2D and DISM phases.
+        caching: 'ReadOnly'
         createOption: 'Empty'
         deleteOption: 'Delete'
         diskSizeGB: dataDiskSizeGiB

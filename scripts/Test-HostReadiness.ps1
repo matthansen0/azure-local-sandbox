@@ -132,6 +132,25 @@ Add-ReadinessCheck `
     -Passed ($null -ne $networkAddressTranslation -and $networkAddressTranslation.InternalIPInterfaceAddressPrefix -eq '192.168.128.0/24') `
     -Detail $(if ($networkAddressTranslation) { "Prefix: $($networkAddressTranslation.InternalIPInterfaceAddressPrefix)" } else { 'Not found' })
 
+# A servicing restart of this host stops every nested guest, which a running Azure Local deployment
+# cannot recover from.
+$automaticUpdatePolicy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
+$noAutoUpdate = (Get-ItemProperty -Path $automaticUpdatePolicy -Name 'NoAutoUpdate' -ErrorAction SilentlyContinue).NoAutoUpdate
+Add-ReadinessCheck `
+    -Name 'Automatic servicing restarts' `
+    -Passed ($noAutoUpdate -eq 1) `
+    -Detail $(if ($noAutoUpdate -eq 1) { 'Disabled' } else { 'Enabled; Windows Update can restart the host mid-deployment' })
+
+$pendingRebootPaths = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'
+    'HKLM:\SOFTWARE\Microsoft\Windows\WindowsUpdate\Auto Update\RebootRequired'
+)
+$pendingReboot = @($pendingRebootPaths | Where-Object { Test-Path -LiteralPath $_ })
+Add-ReadinessCheck `
+    -Name 'No pending restart' `
+    -Passed ($pendingReboot.Count -eq 0) `
+    -Detail $(if ($pendingReboot.Count) { "Pending: $($pendingReboot -join ', ')" } else { 'None' })
+
 $results | Format-Table -AutoSize
 
 $failedChecks = @($results | Where-Object { -not $_.Passed })

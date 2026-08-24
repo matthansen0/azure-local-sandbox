@@ -425,6 +425,29 @@ else {
     'azure-local-deploy'
 }
 
+# A deploymentSettings child resource left in Failed state makes every later attempt return that same
+# failure, so the previous attempt is removed before a new one is submitted.
+$deploymentSettingsPath = "/subscriptions/$($context.subscriptionId)/resourceGroups/$($context.resourceGroupName)" +
+    "/providers/Microsoft.AzureStackHCI/clusters/$($deploymentParameters.clusterName)/deploymentSettings/default?api-version=2024-04-01"
+$existingSettings = Invoke-AzRestMethod -Method GET -Path $deploymentSettingsPath -ErrorAction SilentlyContinue
+if ($existingSettings -and $existingSettings.StatusCode -eq 200 -and
+    ($existingSettings.Content | ConvertFrom-Json).properties.provisioningState -eq 'Failed') {
+    Write-Step 'Removing the failed deployment settings left by the previous attempt...'
+    $null = Invoke-AzRestMethod -Method DELETE -Path $deploymentSettingsPath
+
+    $removalDeadline = (Get-Date).AddMinutes(20)
+    while ($true) {
+        $probe = Invoke-AzRestMethod -Method GET -Path $deploymentSettingsPath -ErrorAction SilentlyContinue
+        if (-not $probe -or $probe.StatusCode -eq 404) {
+            break
+        }
+        if ((Get-Date) -ge $removalDeadline) {
+            throw "The failed deployment settings on cluster '$($deploymentParameters.clusterName)' were not removed within 20 minutes."
+        }
+        Start-Sleep -Seconds 20
+    }
+}
+
 Write-Step "Submitting deployment '$deploymentName' in $($context.resourceGroupName). Azure Local $Mode runs for a few hours; follow the deployment in the portal."
 $deployment = New-AzResourceGroupDeployment `
     -Name $deploymentName `

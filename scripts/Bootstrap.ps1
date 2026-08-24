@@ -356,6 +356,25 @@ function Initialize-HostNetworking {
     }
 }
 
+function Suspend-AutomaticServicing {
+    # Azure Local deployment runs for hours inside the nested guests, and a servicing restart of this
+    # host stops all of them mid-flight, which the deployment cannot recover from.
+    $updatePolicy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'
+    $automaticUpdatePolicy = Join-Path $updatePolicy 'AU'
+    New-Item -Path $automaticUpdatePolicy -Force | Out-Null
+
+    Set-ItemProperty -Path $automaticUpdatePolicy -Name 'NoAutoUpdate' -Value 1 -Type DWord
+    Set-ItemProperty -Path $automaticUpdatePolicy -Name 'AUOptions' -Value 2 -Type DWord
+    Set-ItemProperty -Path $automaticUpdatePolicy -Name 'NoAutoRebootWithLoggedOnUsers' -Value 1 -Type DWord
+    Set-ItemProperty -Path $updatePolicy -Name 'SetDisableUXWUAccess' -Value 0 -Type DWord
+
+    foreach ($taskPath in @('\Microsoft\Windows\UpdateOrchestrator\', '\Microsoft\Windows\WindowsUpdate\')) {
+        Get-ScheduledTask -TaskPath $taskPath -ErrorAction SilentlyContinue |
+            Where-Object { $_.TaskName -match '(?i)reboot|restart' } |
+            Disable-ScheduledTask -ErrorAction SilentlyContinue | Out-Null
+    }
+}
+
 function Invoke-PostRebootConfiguration {
     Write-DeploymentState -Phase 'ConfiguringHost' -Message 'Configuring storage and Hyper-V networking.'
 
@@ -365,6 +384,8 @@ function Invoke-PostRebootConfiguration {
         $vmManagementService.WaitForStatus('Running', (New-TimeSpan -Minutes 5))
     }
 
+    Suspend-AutomaticServicing
+    Write-Step 'Automatic servicing restarts are disabled for the lab lifetime.'
     Initialize-NestedVmStorage
     Write-Step 'Nested VM storage volume V: is ready.'
     Initialize-HostNetworking

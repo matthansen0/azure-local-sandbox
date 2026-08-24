@@ -642,6 +642,17 @@ exit /b 0
                         }
                     }
 
+                    # NAT rewrites IP/TCP headers, and under nested virtualisation the offload engines
+                    # recompute those checksums wrongly, so every translated packet is discarded
+                    # upstream. Traffic the router originates itself is unaffected, which makes this
+                    # look like a routing fault: guests behind the NAT collapse to ~0.01 MB/s while the
+                    # router still downloads at full speed, and `az arcappliance prepare` times out.
+                    foreach ($routerInterface in @('NAT', 'Mgmt', 'Provider', 'VLAN110', 'VLAN200', 'SIMInternet')) {
+                        Disable-NetAdapterChecksumOffload -Name $routerInterface -Confirm:$false -ErrorAction SilentlyContinue
+                        Disable-NetAdapterLso -Name $routerInterface -Confirm:$false -ErrorAction SilentlyContinue
+                        Disable-NetAdapterRsc -Name $routerInterface -Confirm:$false -ErrorAction SilentlyContinue
+                    }
+
                     # RRAS refuses a stop control for a short window after its NAT configuration is
                     # rewritten, and Restart-Service reports that as a terminal error even though the
                     # netsh changes are already live in the running service.

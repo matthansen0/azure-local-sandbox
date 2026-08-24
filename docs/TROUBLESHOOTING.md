@@ -147,6 +147,62 @@ The last lines of the DISM log identify where it stopped. Runs from before this 
 `C:\Windows\Logs\DISM\dism.log` instead. Rerun the stage afterwards; a partial VHDX is deleted on
 failure, so the conversion restarts cleanly.
 
+### Azure Local deployment fails with PrepareKvaTimeoutError
+
+The cloud deployment fails while staging the Arc Resource Bridge:
+
+```text
+PrepareKvaTimeoutError: "Appliance Prepare timed out"
+az arcappliance prepare hci --config-file ...hci-appliance.yaml
+```
+
+`prepare` downloads the appliance images and has a fixed timeout. It expires because every guest
+behind `Vm-Router` is limited to roughly `0.01 MB/s`, so the images never finish downloading.
+
+The cause is checksum offload on `Vm-Router`. RRAS NAT rewrites IP and TCP headers, and under nested
+virtualisation the offload engines recompute those checksums incorrectly, so translated packets are
+discarded upstream. Only *forwarded* traffic is affected, which disguises the fault: the router
+itself downloads at full speed while everything behind it stalls, so it looks like a routing,
+MTU or vSwitch problem. MTU changes, RRAS restarts and RSC/LSO changes all leave it unchanged.
+
+Confirm it by comparing a guest with the router. `JumpstartDC` is the clearest control, because it
+shares the nodes' subnet and default gateway:
+
+```powershell
+./scripts/Test-SandboxDeployment.ps1
+```
+
+Measured on an affected lab, before and after disabling checksum offload:
+
+| Hop | Before | After |
+|---|---|---|
+| Host | 40.50 MB/s | 50.13 MB/s |
+| `Vm-Router` | 27.70 MB/s | 34.70 MB/s |
+| `JumpstartDC` | 0.01 MB/s | 30.25 MB/s |
+| `AzLHOST1` | 0.01 MB/s | 22.92 MB/s |
+| `AzLHOST2` | 0.01 MB/s | 27.05 MB/s |
+
+`Initialize-ManagementPlane.ps1` now disables checksum offload, LSO and RSC on every `Vm-Router`
+interface. On a lab built before this fix, apply it in place and rerun the deployment:
+
+```powershell
+$credentials = Import-Clixml -LiteralPath 'C:\AzureLocalSandbox\State\lab-credentials.xml'
+Invoke-Command -VMName 'AzLMGMT' -Credential $credentials.Local -ArgumentList $credentials.Local -ScriptBlock {
+    param([PSCredential]$Cred)
+    Invoke-Command -VMName 'Vm-Router' -Credential $Cred -ScriptBlock {
+        foreach ($nic in 'NAT', 'Mgmt', 'Provider', 'VLAN110', 'VLAN200', 'SIMInternet') {
+            Disable-NetAdapterChecksumOffload -Name $nic -Confirm:$false -ErrorAction SilentlyContinue
+            Disable-NetAdapterLso -Name $nic -Confirm:$false -ErrorAction SilentlyContinue
+            Disable-NetAdapterRsc -Name $nic -Confirm:$false -ErrorAction SilentlyContinue
+        }
+    }
+}
+```
+
+The setting persists across restarts. Note that SMB is a poor probe for this fault: an SMB pull
+between guests can report a collapse even when the underlying TCP path is healthy, so measure with
+a plain HTTP download or a raw TCP stream.
+
 ### Azure Local provider principal is not found
 
 Register `Microsoft.AzureStackHCI`, then retry, or provide the tenant-specific object ID:

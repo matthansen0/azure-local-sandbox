@@ -4,7 +4,10 @@
 param(
     [string]$BicepExecutable = 'bicep',
 
-    [switch]$SkipBicep
+    [switch]$SkipBicep,
+
+    # Excludes the tests that reach the network, so the suite can run without egress.
+    [switch]$Offline
 )
 
 Set-StrictMode -Version Latest
@@ -119,6 +122,9 @@ $pesterConfiguration.Output.Verbosity = 'Detailed'
 $pesterConfiguration.TestResult.Enabled = $true
 $pesterConfiguration.TestResult.OutputPath = Join-Path $repoRoot 'TestResults/Pester.xml'
 $pesterConfiguration.TestResult.OutputFormat = 'NUnitXml'
+if ($Offline) {
+    $pesterConfiguration.Filter.ExcludeTag = 'Network'
+}
 
 $pesterResult = Invoke-Pester -Configuration $pesterConfiguration
 if ($pesterResult.FailedCount -gt 0) {

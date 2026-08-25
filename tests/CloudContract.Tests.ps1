@@ -61,7 +61,7 @@ AfterAll {
     Remove-Item -LiteralPath $fixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Describe 'Maintained Azure Local Quickstart contract' {
+Describe 'Maintained Azure Local Quickstart contract' -Tag 'Network' {
     It 'uses the reviewed immutable template revision' {
         $quickstartDependency.Commit | Should -Match '^[0-9a-f]{40}$'
         $quickstartDependency.Sha256 | Should -Match '^[A-F0-9]{64}$'

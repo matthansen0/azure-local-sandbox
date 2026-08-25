@@ -21,14 +21,35 @@ jobs:
         run: |
           $dependencies = Import-PowerShellDataFile ./config/dependencies.psd1
           foreach ($module in @($dependencies.PowerShellModules.Pester, $dependencies.PowerShellModules.PSScriptAnalyzer)) {
-            Install-Module -Name $module.Name -RequiredVersion $module.Version -Force -Scope CurrentUser -AllowClobber
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+              try {
+                Install-Module -Name $module.Name -RequiredVersion $module.Version -Force -Scope CurrentUser -SkipPublisherCheck -AllowClobber
+                break
+              }
+              catch {
+                if ($attempt -eq 3) { throw }
+                Write-Host "::warning::$($module.Name) install attempt $attempt failed: $($_.Exception.Message)"
+                Start-Sleep -Seconds ([math]::Pow(2, $attempt) * 5)
+              }
+            }
           }
 
       - name: Install pinned Bicep
         shell: pwsh
         run: |
           $bicep = (Import-PowerShellDataFile ./config/dependencies.psd1).Bicep
-          Invoke-WebRequest -Uri $bicep.DownloadUri -OutFile "$HOME/bicep"
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $bicep.DownloadUri -OutFile "$HOME/bicep"
+              break
+            }
+            catch {
+              if ($attempt -eq 3) { throw }
+              Write-Host "::warning::Bicep download attempt $attempt failed: $($_.Exception.Message)"
+              Start-Sleep -Seconds ([math]::Pow(2, $attempt) * 5)
+            }
+          }
+          # A hash mismatch means the release moved, not a transient fault, so it is never retried.
           $actualHash = (Get-FileHash "$HOME/bicep" -Algorithm SHA256).Hash
           if ($actualHash -ne $bicep.Sha256) {
             throw "Bicep hash mismatch. Expected $($bicep.Sha256), got $actualHash."
@@ -56,7 +77,17 @@ jobs:
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
           Install-PackageProvider -Name NuGet -Force | Out-Null
           $pester = (Import-PowerShellDataFile ./config/dependencies.psd1).PowerShellModules.Pester
-          Install-Module -Name $pester.Name -RequiredVersion $pester.Version -Force -Scope CurrentUser -SkipPublisherCheck -AllowClobber
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+              Install-Module -Name $pester.Name -RequiredVersion $pester.Version -Force -Scope CurrentUser -SkipPublisherCheck -AllowClobber
+              break
+            }
+            catch {
+              if ($attempt -eq 3) { throw }
+              Write-Host "::warning::Pester install attempt $attempt failed: $($_.Exception.Message)"
+              Start-Sleep -Seconds ([math]::Pow(2, $attempt) * 5)
+            }
+          }
 
       - name: Execute host script logic
         shell: powershell

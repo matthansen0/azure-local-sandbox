@@ -91,11 +91,19 @@ Describe 'Maintained Azure Local Quickstart contract' {
         $generatedParameters.physicalNodesSettings[1].ipv4Address | Should -Be '192.168.1.13'
     }
 
-    It 'uses a cloud witness and switchless two-node networking' {
-        $generatedParameters.witnessType | Should -Be 'Cloud'
+    It 'uses a file share witness and switchless two-node networking' {
+        # A cloud witness needs the storage account key, so the generated data selects no witness and the
+        # template is patched to FileShare after its hash is verified.
+        $generatedParameters.witnessType | Should -Be 'No Witness'
         $generatedParameters.networkingType | Should -Be 'switchlessMultiServerDeployment'
         $generatedParameters.networkingPattern | Should -Be 'convergedManagementCompute'
         @($generatedParameters.storageNetworkList).Count | Should -Be 2
+    }
+
+    It 'pins a template that still exposes the witness fields the deployment patches' {
+        $templateText = Get-Content -LiteralPath $templateDownloadPath -Raw
+        $templateText.Contains('"witnessType": "[variables(''witnessTypeVar'')]"') | Should -BeTrue
+        $templateText.Contains('"witnessPath": ""') | Should -BeTrue
     }
 
     It 'uses the nested-lab WDAC profile' {

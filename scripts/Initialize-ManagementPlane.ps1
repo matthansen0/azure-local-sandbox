@@ -140,6 +140,7 @@ function Wait-NestedPowerShellDirect {
                         }
                     }
                     catch {
+                        continue
                     }
                 }
 
@@ -927,6 +928,7 @@ exit /b 0
                         $ouExists = Get-ADOrganizationalUnit -Identity $ouDistinguishedName -ErrorAction Stop
                     }
                     catch [Microsoft.ActiveDirectory.Management.ADIdentityNotFoundException] {
+                        $ouExists = $null
                     }
 
                     $lcmUser = $null
@@ -934,6 +936,7 @@ exit /b 0
                         $lcmUser = Get-ADUser -Identity $Configuration.Domain.DeploymentUserName -ErrorAction Stop
                     }
                     catch [Microsoft.ActiveDirectory.Management.ADIdentityNotFoundException] {
+                        $lcmUser = $null
                     }
 
                     if (-not $ouExists -or -not $lcmUser) {

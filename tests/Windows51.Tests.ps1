@@ -1,9 +1,16 @@
+# Evaluated at discovery so the elevation-only test skips instead of failing on a non-elevated dev host.
+$isElevatedWindows = $false
+if ([System.Environment]::OSVersion.Platform -eq 'Win32NT') {
+    $isElevatedWindows = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
 Describe 'Host script execution under Windows PowerShell' -Skip:([System.Environment]::OSVersion.Platform -ne 'Win32NT') {
     BeforeAll {
         $repoRoot = Split-Path -Parent $PSScriptRoot
     }
 
-    It 'runs Test-HostReadiness.ps1 to completion against a simulated ready host' {
+    It 'runs Test-HostReadiness.ps1 to completion against a simulated ready host' -Skip:(-not $isElevatedWindows) {
         Set-StrictMode -Version Latest
 
         function Get-CimInstance {
@@ -60,6 +67,12 @@ Describe 'Host script execution under Windows PowerShell' -Skip:([System.Environ
             [pscustomobject]@{ InternalIPInterfaceAddressPrefix = '192.168.128.0/24' }
         }
 
+        function Get-ItemProperty {
+            [CmdletBinding()]
+            param([string]$Path, [string]$Name)
+            [pscustomobject]@{ NoAutoUpdate = 1 }
+        }
+
         # lab.psd1 is read for real so the memory calculation executes; only fixed host paths are simulated.
         function Test-Path {
             [CmdletBinding()]
@@ -67,6 +80,11 @@ Describe 'Host script execution under Windows PowerShell' -Skip:([System.Environ
 
             if ($LiteralPath -like 'C:\AzureLocalSandbox\*') {
                 return $true
+            }
+
+            # Answered directly so a servicing restart pending on the test runner cannot fail the run.
+            if ($LiteralPath -like 'HKLM:\*') {
+                return $false
             }
 
             return Microsoft.PowerShell.Management\Test-Path -LiteralPath $LiteralPath

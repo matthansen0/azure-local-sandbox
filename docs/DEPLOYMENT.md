@@ -5,7 +5,7 @@ This guide covers the supported two-phase workflow:
 1. Deploy and bootstrap `LocalBox-Client` in Azure.
 2. Connect through Azure Bastion, download licensed ISO media, and continue from the desktop launcher.
 
-Return to the [project overview](../README.md) or see [troubleshooting](TROUBLESHOOTING.md).
+Return to the [project overview](../README.md) or see the [stage contract](STAGE-CONTRACT.md) and [troubleshooting](TROUBLESHOOTING.md).
 
 ## Prerequisites
 
@@ -181,6 +181,26 @@ List ISO image indexes:
 
 Choose the Windows Server index whose name ends in `(Desktop Experience)`. On evaluation media that is index 4, not index 3. Server Core indexes are rejected because the nested management host cannot install its Hyper-V management tools from them.
 
+Run the preflight before committing hours to a run:
+
+```powershell
+./scripts/Invoke-SandboxDeployment.ps1 `
+  -LocalAdministratorCredential $localCredential `
+  -DomainAdministratorCredential $domainCredential `
+  -LcmCredential $lcmCredential `
+  -PreflightOnly
+```
+
+This runs the host readiness checks and the Azure checks, then stops before any stage. It covers the
+managed-identity sign-in, the sandbox resource group, the Azure Local region, and the soft-deleted key
+vault collision. Those last two are otherwise only discovered by the cloud deployment stage, roughly six
+hours in. Results are written to `C:\AzureLocalSandbox\State\preflight.json`.
+
+A key vault is soft-deleted for 30 days after the resource group is removed, and its name is derived from
+the subscription and resource group, so a rebuilt group collides with its own previous vault. Preflight
+reports the collision and prints the `az keyvault purge` command. Pass `-PurgeSoftDeletedKeyVault` to have
+it purged automatically; purging is irreversible, so it never happens unless asked for.
+
 Run validation:
 
 ```powershell
@@ -210,6 +230,11 @@ Install-Module Pester -RequiredVersion 6.0.1 -Scope CurrentUser -Force
 Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
 ./tests/Invoke-Tests.ps1
 ```
+
+`./tests/Invoke-Tests.ps1` needs the pinned Bicep version on `PATH` and reaches GitHub to re-verify the
+pinned Quickstart template. Use `-Offline` to skip the tests that need network access, and `-SkipBicep`
+to skip the template build. The test that runs `Test-HostReadiness.ps1` needs an elevated session and
+skips itself otherwise.
 
 Run live checks inside `LocalBox-Client`:
 

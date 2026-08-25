@@ -20,7 +20,10 @@ param(
     [string]$TargetSolutionVersion,
 
     [ValidateRange(15, 120)]
-    [int]$RegistrationTimeoutMinutes = 60
+    [int]$RegistrationTimeoutMinutes = 60,
+
+    [ValidateRange(1, 5)]
+    [int]$ArcInitializationAttempts = 3
 )
 
 Set-StrictMode -Version Latest
@@ -283,47 +286,62 @@ $registrationResults = foreach ($nodeConfiguration in $nodeConfigurations) {
         continue
     }
 
-    $accessTokenResponse = Get-AzAccessToken -ResourceUrl 'https://management.azure.com/'
-    $armAccessToken = ConvertFrom-SecureToken -Token $accessTokenResponse.Token
     $accountId = (Get-AzContext).Account.Id
-    try {
-        Write-Step "Running Invoke-AzStackHciArcInitialization on $($nodeConfiguration.Name). This takes 10-20 minutes per node..."
-        Invoke-Command `
-            -VMName $nodeConfiguration.Name `
-            -Credential $LocalAdministratorCredential `
-            -ArgumentList $context, $armAccessToken, $accountId, $TargetSolutionVersion `
-            -ScriptBlock {
-                param(
-                    $Context,
-                    [string]$ArmAccessToken,
-                    [string]$AccountId,
-                    [string]$TargetSolutionVersion
-                )
+    $initializationResult = $null
+    for ($attempt = 1; $attempt -le $ArcInitializationAttempts -and -not $initializationResult; $attempt++) {
+        # Re-issued per attempt because a retry starts long after the previous token was minted.
+        $accessTokenResponse = Get-AzAccessToken -ResourceUrl 'https://management.azure.com/'
+        $armAccessToken = ConvertFrom-SecureToken -Token $accessTokenResponse.Token
+        try {
+            Write-Step "Running Invoke-AzStackHciArcInitialization on $($nodeConfiguration.Name), attempt $attempt of $ArcInitializationAttempts. This takes 10-20 minutes per node..."
+            Invoke-Command `
+                -VMName $nodeConfiguration.Name `
+                -Credential $LocalAdministratorCredential `
+                -ArgumentList $context, $armAccessToken, $accountId, $TargetSolutionVersion `
+                -ScriptBlock {
+                    param(
+                        $Context,
+                        [string]$ArmAccessToken,
+                        [string]$AccountId,
+                        [string]$TargetSolutionVersion
+                    )
 
-                $parameters = @{
-                    TenantId       = $Context.tenantId
-                    SubscriptionID = $Context.subscriptionId
-                    ResourceGroup  = $Context.resourceGroupName
-                    Region         = $Context.azureLocation
-                    Cloud          = 'AzureCloud'
-                    ArmAccessToken = $ArmAccessToken
-                    AccountID      = $AccountId
-                }
-                if ($TargetSolutionVersion) {
-                    $parameters.TargetSolutionVersion = $TargetSolutionVersion
+                    $parameters = @{
+                        TenantId       = $Context.tenantId
+                        SubscriptionID = $Context.subscriptionId
+                        ResourceGroup  = $Context.resourceGroupName
+                        Region         = $Context.azureLocation
+                        Cloud          = 'AzureCloud'
+                        ArmAccessToken = $ArmAccessToken
+                        AccountID      = $AccountId
+                    }
+                    if ($TargetSolutionVersion) {
+                        $parameters.TargetSolutionVersion = $TargetSolutionVersion
+                    }
+
+                    Invoke-AzStackHciArcInitialization @parameters
                 }
 
-                Invoke-AzStackHciArcInitialization @parameters
+            $initializationResult = 'InitializationInvoked'
+        }
+        catch {
+            # Only the appliance image download timeout is worth repeating; every other failure is real.
+            $errorText = ($_ | Out-String)
+            if ($attempt -ge $ArcInitializationAttempts -or $errorText -notmatch 'PrepareKvaTimeoutError') {
+                throw
             }
 
-        [pscustomobject]@{
-            Name   = $nodeConfiguration.Name
-            Result = 'InitializationInvoked'
+            Write-Step "$($nodeConfiguration.Name) hit PrepareKvaTimeoutError downloading the appliance image; retrying."
+        }
+        finally {
+            $armAccessToken = $null
+            $accessTokenResponse = $null
         }
     }
-    finally {
-        $armAccessToken = $null
-        $accessTokenResponse = $null
+
+    [pscustomobject]@{
+        Name   = $nodeConfiguration.Name
+        Result = $initializationResult
     }
 }
 

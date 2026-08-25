@@ -94,6 +94,9 @@ resource networkInterface 'Microsoft.Network/networkInterfaces@2024-05-01' = {
   location: location
   tags: tags
   properties: {
+    // Both permitted E32s SKUs support SR-IOV, which the Arc appliance image download and the nested
+    // guest traffic both benefit from.
+    enableAcceleratedNetworking: true
     ipConfigurations: [
       {
         name: 'primary'
@@ -159,9 +162,9 @@ resource virtualMachine 'Microsoft.Compute/virtualMachines@2024-07-01' = {
       dataDisks: [for diskIndex in range(0, dataDiskCount): {
         name: '${vmName}-data-${diskIndex}'
         lun: diskIndex
-        // ReadOnly host caching speeds up the read-heavy phases (parent image hashing, differencing
-        // disk reads) and is Azure's documented setting for Storage Spaces data disks; writes always
-        // bypass the cache, so it does not risk the write-heavy S2D and DISM phases.
+        // ReadOnly host caching serves the read-heavy phases (parent image hashing, differencing disk
+        // reads) from the host cache, and those hits do not count against the VM's uncached ceiling.
+        // ReadWrite is unsafe here because Storage Spaces does not flush the host cache on its own.
         caching: 'ReadOnly'
         createOption: 'Empty'
         deleteOption: 'Delete'

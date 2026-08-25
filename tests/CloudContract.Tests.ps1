@@ -106,6 +106,19 @@ Describe 'Maintained Azure Local Quickstart contract' -Tag 'Network' {
         $templateText.Contains('"witnessPath": ""') | Should -BeTrue
     }
 
+    It 'derives the same key vault name in preflight as in the deployment' {
+        # Preflight has to name the vault before Arc state exists, so it repeats the derivation.
+        # This fails the moment the two copies drift, rather than at the deployment stage hours later.
+        $preflightSource = Get-Content -LiteralPath (Join-Path $repoRoot 'scripts/Test-DeploymentPreflight.ps1') -Raw
+        $preflightScriptBlock = [scriptblock]::Create(
+            [regex]::Match($preflightSource, 'function Get-StableSuffix \{.*?\n\}', 'Singleline').Value +
+            "`nGet-StableSuffix -InputValue '00000000-0000-0000-0000-000000000001/rg-azure-local-contract-test'"
+        )
+        $preflightVaultName = "azlsb-$(& $preflightScriptBlock)-kv"
+
+        $preflightVaultName | Should -Be $generatedParameters.keyVaultName
+    }
+
     It 'uses the nested-lab WDAC profile' {
         $generatedParameters.securityLevel | Should -Be 'Recommended'
         $generatedParameters.wdacEnforced | Should -BeFalse

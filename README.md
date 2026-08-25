@@ -12,7 +12,8 @@ workloads.
 
 [Deployment guide](docs/DEPLOYMENT.md) |
 [Troubleshooting](docs/TROUBLESHOOTING.md) |
-[Technical reference](docs/TECHNICAL.md)
+[Technical reference](docs/TECHNICAL.md) |
+[Stage contract](docs/STAGE-CONTRACT.md)
 
 ## What It Builds
 

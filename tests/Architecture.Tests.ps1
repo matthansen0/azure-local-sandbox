@@ -2,6 +2,7 @@ BeforeAll {
     $repoRoot = Split-Path -Parent $PSScriptRoot
     $configuration = Import-PowerShellDataFile (Join-Path $repoRoot 'config/lab.psd1')
     $networkTemplate = Get-Content (Join-Path $repoRoot 'infra/modules/network.bicep') -Raw
+    $hostTemplate = Get-Content (Join-Path $repoRoot 'infra/modules/host.bicep') -Raw
     $dependencies = Import-PowerShellDataFile (Join-Path $repoRoot 'config/dependencies.psd1')
 
     function Get-IPv4Range {
@@ -396,5 +397,97 @@ Describe 'Management plane orchestration contract' {
         $rrasConfigurationIndex | Should -BeGreaterThan $readinessWaitIndex
         $managementPlaneSource | Should -Match "Restart-VM -Name 'Vm-Router' -Force"
         $managementPlaneSource | Should -Match 'Get-Command -Name Install-RemoteAccess'
+    }
+}
+Describe 'Fail-fast deployment contract' {
+    BeforeAll {
+        $orchestratorSource = Get-Content (Join-Path $repoRoot 'scripts/Invoke-SandboxDeployment.ps1') -Raw
+        $preflightSource = Get-Content (Join-Path $repoRoot 'scripts/Test-DeploymentPreflight.ps1') -Raw
+        $cloudDeploymentSource = Get-Content (Join-Path $repoRoot 'scripts/Deploy-AzureLocal.ps1') -Raw
+        $arcRegistrationSource = Get-Content (Join-Path $repoRoot 'scripts/Register-AzureLocalNodes.ps1') -Raw
+    }
+
+    It 'runs the Azure preflight before any stage that costs time or money' {
+        $preflightIndex = $orchestratorSource.IndexOf('Test-DeploymentPreflight.ps1')
+        $firstStageIndex = $orchestratorSource.IndexOf("Invoke-Stage -Name 'Images'")
+
+        $preflightIndex | Should -BeGreaterThan 0
+        $firstStageIndex | Should -BeGreaterThan $preflightIndex
+        $orchestratorSource | Should -Match '\[switch\]\$PreflightOnly'
+    }
+
+    It 'checks the soft-deleted key vault before Arc registration, not after it' {
+        # Deploy-AzureLocal.ps1 only reaches its own check hours in, so preflight has to own the early one.
+        $preflightSource | Should -Match 'deletedVaults'
+        $preflightSource | Should -Match 'azlsb-'
+    }
+
+    It 'reports preflight results through a file rather than the success stream' {
+        $preflightSource | Should -Match 'Set-Content -LiteralPath \$ReportPath'
+        $preflightSource | Should -Match "phase\s+=\s+if \(\`$failedChecks\.Count -eq 0\) \{ 'PreflightPassed' \}"
+    }
+
+    It 'never purges a key vault unless the caller opts in' {
+        foreach ($source in @($preflightSource, $cloudDeploymentSource)) {
+            $source | Should -Match '\[switch\]\$PurgeSoftDeletedKeyVault'
+            $source | Should -Match "-Method POST"
+        }
+
+        # The switch has no default value, so an unattended run reports the collision instead of destroying data.
+        $preflightSource | Should -Not -Match '\$PurgeSoftDeletedKeyVault\s*=\s*\$true'
+        $cloudDeploymentSource | Should -Not -Match '\$PurgeSoftDeletedKeyVault\s*=\s*\$true'
+    }
+
+    It 'retries Arc initialization only for the transient appliance download timeout' {
+        $arcRegistrationSource | Should -Match 'PrepareKvaTimeoutError'
+        $arcRegistrationSource | Should -Match '\$errorText -notmatch ''PrepareKvaTimeoutError'''
+        $arcRegistrationSource | Should -Match '\[int\]\$ArcInitializationAttempts = 3'
+
+        # A retry starts long after the first token was minted, so it has to be re-issued per attempt.
+        $tokenIndex = $arcRegistrationSource.IndexOf('$accessTokenResponse = Get-AzAccessToken')
+        $loopIndex = $arcRegistrationSource.IndexOf('for ($attempt = 1; $attempt -le $ArcInitializationAttempts')
+        $loopIndex | Should -BeGreaterThan 0
+        $tokenIndex | Should -BeGreaterThan $loopIndex
+    }
+
+    It 'refuses to resume when the parent images no longer back the nested VMs' {
+        $orchestratorSource | Should -Match 'Nested VM state exists but the verified parent images are missing'
+        $guardIndex = $orchestratorSource.IndexOf('$imagesVerified = Test-ImageState')
+        $firstStageIndex = $orchestratorSource.IndexOf("Invoke-Stage -Name 'Images'")
+        $guardIndex | Should -BeGreaterThan 0
+        $firstStageIndex | Should -BeGreaterThan $guardIndex
+    }
+}
+
+Describe 'Host performance contract' {
+    It 'enables accelerated networking on the host NIC' {
+        # Both permitted E32s SKUs support SR-IOV, and it is off unless the template asks for it.
+        $hostTemplate | Should -Match 'enableAcceleratedNetworking: true'
+    }
+
+    It 'keeps ReadOnly caching on the nested VM data disks' {
+        # ReadWrite would risk Storage Spaces data on a crash; None would forfeit the cached read budget.
+        $dataDiskBlock = [regex]::Match(
+            $hostTemplate,
+            'dataDisks: \[for diskIndex in range\(0, dataDiskCount\): \{(?<body>.*?)\n      \}\]',
+            'Singleline'
+        ).Groups['body'].Value
+        $dataDiskBlock | Should -Match "caching: 'ReadOnly'"
+        $dataDiskBlock | Should -Not -Match "caching: 'ReadWrite'"
+    }
+
+    It 'keeps the disk aggregate inside the uncached ceiling of the default VM size' {
+        # 8 x P30 is 40,000 IOPS and 1,600 MB/s; Standard_E32s_v6 allows 51,200 IOPS and 1,696 MB/s
+        # uncached, so the disks stay the limit. Standard_E32s_v5 caps throughput at 865 MB/s.
+        $hostTemplate | Should -Match "param vmSize string = 'Standard_E32s_v6'"
+        $hostTemplate | Should -Match 'param dataDiskCount int = 8'
+        $hostTemplate | Should -Match 'param dataDiskSizeGiB int = 1024'
+    }
+
+    It 'launches ISO conversions as isolated workers and reads file-based results' {
+        $converterSource = Get-Content (Join-Path $repoRoot 'scripts/Convert-LabIsoMedia.ps1') -Raw
+        $converterSource | Should -Match "Start-Job -ArgumentList"
+        $converterSource | Should -Match "WorkerResultPath"
+        $converterSource | Should -Match "ConvertFrom-Json"
     }
 }

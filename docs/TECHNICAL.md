@@ -1,6 +1,6 @@
 # Technical Reference
 
-Return to the [project overview](../README.md), [deployment guide](DEPLOYMENT.md), or [troubleshooting](TROUBLESHOOTING.md).
+Return to the [project overview](../README.md), [deployment guide](DEPLOYMENT.md), [stage contract](STAGE-CONTRACT.md), or [troubleshooting](TROUBLESHOOTING.md).
 
 ## Architecture
 
@@ -120,6 +120,22 @@ Custom immutable HTTPS artifact URLs can be supplied instead.
 - The lab uses a 32-vCPU host, 1-TiB OS disk, eight Premium SSDs, Bastion, and NAT Gateway.
 - Deallocating the VM does not stop disk, Bastion, or NAT charges.
 - Spot pricing is intentionally unsupported.
+
+## Host Storage Sizing
+
+The eight 1-TiB Premium SSDs are P30 disks, each rated 5,000 IOPS and 200 MB/s, so the striped volume
+offers roughly 40,000 IOPS and 1,600 MB/s. `Standard_E32s_v6`, the default size, allows 51,200 uncached
+IOPS and 1,696 MB/s, so the disks remain the limit and the VM has headroom on both axes. The alternative
+`Standard_E32s_v5` allows the same 51,200 IOPS but only 865 MB/s, which would waste about half the
+available disk throughput. That is the reason for the default.
+
+Host caching is `ReadOnly` on the data disks and `ReadWrite` on the OS disk, matching the Azure defaults
+and the documented recommendation. Reads that hit the host cache are served from host memory and local
+SSD and are not counted against the uncached ceiling above, so `ReadOnly` raises the effective total for
+the read-heavy phases such as parent image hashing and differencing disk reads. `ReadWrite` is not used
+on the data disks: it only completes a write once it reaches the cache, and Storage Spaces does not
+guarantee the flush that would make that safe across a host crash. Caching is unavailable on disks of
+4 TiB and larger, which is another reason the lab uses eight smaller disks rather than fewer large ones.
 
 ## Monitoring Containment
 

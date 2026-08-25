@@ -3,6 +3,11 @@
 #Requires -Modules Dism, Hyper-V, Storage
 
 [CmdletBinding()]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+    'PSUseUsingScopeModifierInNewRunspaces',
+    '',
+    Justification = 'The worker receives every value through Start-Job ArgumentList and keeps the script block self-contained for Windows PowerShell 5.1.'
+)]
 param(
     [Parameter(Mandatory)]
     [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]
@@ -36,6 +41,11 @@ param(
     [string]$StateFile = 'C:\AzureLocalSandbox\State\images.json',
 
     [string]$ListImagesJsonPath = (Join-Path $env:TEMP 'AzureLocalSandboxIsoImages.json'),
+
+    [ValidateSet('WindowsServer', 'AzureLocal')]
+    [string]$Worker,
+
+    [string]$WorkerResultPath,
 
     [switch]$ListImages,
 
@@ -355,23 +365,104 @@ try {
     }
 
     New-Item -Path $DestinationDirectory -ItemType Directory -Force | Out-Null
+    $conversionRequests = @(
+        [pscustomobject]@{
+            Name             = 'WindowsServer'
+            InstallImage     = $windowsInstallImage
+            ImageIndex       = $WindowsServerImageIndex
+            DestinationPath  = Join-Path $DestinationDirectory 'WindowsServer2025.vhdx'
+            ImageNamePattern = 'Windows Server 2025.*\(Desktop Experience\)'
+        }
+        [pscustomobject]@{
+            Name             = 'AzureLocal'
+            InstallImage     = $azureLocalInstallImage
+            ImageIndex       = $AzureLocalImageIndex
+            DestinationPath  = Join-Path $DestinationDirectory 'AzureLocal.vhdx'
+            ImageNamePattern = 'Azure Stack HCI|Azure Local'
+        }
+    )
+
+    if ($Worker) {
+        $conversionRequests = @($conversionRequests | Where-Object Name -eq $Worker)
+    }
+
+    if ($Worker) {
+        $images = @(
+            foreach ($request in $conversionRequests) {
+                $result = Convert-InstallImageToVhdx `
+                    -InstallImage $request.InstallImage `
+                    -ImageIndex $request.ImageIndex `
+                    -DestinationPath $request.DestinationPath `
+                    -DiskSizeBytes $BootDiskSizeBytes `
+                    -ExpectedImageNamePattern $request.ImageNamePattern `
+                    -StallMinutes $ApplyStallMinutes `
+                    -Overwrite:$Force
+
+                if ($WorkerResultPath) {
+                    $result | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $WorkerResultPath -Encoding UTF8
+                }
+                $result
+            }
+        )
+        return
+    }
+
+    $workerJobs = @(
+        foreach ($request in $conversionRequests) {
+            $workerResultPath = Join-Path $env:TEMP "AzureLocalSandbox-$($request.Name)-$([guid]::NewGuid()).json"
+            $workerParameters = @{
+                WindowsServerIsoPath   = $WindowsServerIsoPath
+                AzureLocalIsoPath      = $AzureLocalIsoPath
+                WindowsServerIsoSha256 = $WindowsServerIsoSha256
+                AzureLocalIsoSha256    = $AzureLocalIsoSha256
+                WindowsServerImageIndex = $WindowsServerImageIndex
+                AzureLocalImageIndex    = $AzureLocalImageIndex
+                BootDiskSizeBytes      = $BootDiskSizeBytes
+                ApplyStallMinutes      = $ApplyStallMinutes
+                DestinationDirectory   = $DestinationDirectory
+                Worker                 = $request.Name
+                WorkerResultPath       = $workerResultPath
+                Force                  = [bool]$Force
+            }
+
+            [pscustomobject]@{
+                Job        = Start-Job -ArgumentList (Join-Path $PSScriptRoot 'Convert-LabIsoMedia.ps1'), $workerParameters -ScriptBlock {
+                    param(
+                        [string]$ScriptPath,
+                        [hashtable]$Parameters
+                    )
+
+                    & $ScriptPath @Parameters
+                    if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
+                        throw "Image conversion worker exited with code $LASTEXITCODE."
+                    }
+                }
+                ResultPath = $workerResultPath
+                Name       = $request.Name
+            }
+        }
+    )
+
     $images = @(
-        Convert-InstallImageToVhdx `
-            -InstallImage $windowsInstallImage `
-            -ImageIndex $WindowsServerImageIndex `
-            -DestinationPath (Join-Path $DestinationDirectory 'WindowsServer2025.vhdx') `
-            -DiskSizeBytes $BootDiskSizeBytes `
-            -ExpectedImageNamePattern 'Windows Server 2025.*\(Desktop Experience\)' `
-            -StallMinutes $ApplyStallMinutes `
-            -Overwrite:$Force
-        Convert-InstallImageToVhdx `
-            -InstallImage $azureLocalInstallImage `
-            -ImageIndex $AzureLocalImageIndex `
-            -DestinationPath (Join-Path $DestinationDirectory 'AzureLocal.vhdx') `
-            -DiskSizeBytes $BootDiskSizeBytes `
-            -ExpectedImageNamePattern 'Azure Stack HCI|Azure Local' `
-            -StallMinutes $ApplyStallMinutes `
-            -Overwrite:$Force
+        foreach ($worker in $workerJobs) {
+            Wait-Job -Job $worker.Job | Out-Null
+            $workerOutput = Receive-Job -Job $worker.Job -ErrorAction SilentlyContinue
+            if ($worker.Job.State -ne 'Completed') {
+                $workerError = if ($workerOutput) { ($workerOutput | Out-String).Trim() } else { 'No worker output.' }
+                Remove-Job -Job $worker.Job -Force -ErrorAction SilentlyContinue
+                throw "$($worker.Name) image conversion worker failed: $workerError"
+            }
+
+            if (-not (Test-Path -LiteralPath $worker.ResultPath)) {
+                Remove-Job -Job $worker.Job -Force -ErrorAction SilentlyContinue
+                throw "$($worker.Name) image conversion worker completed without writing its result."
+            }
+
+            $result = Get-Content -LiteralPath $worker.ResultPath -Raw | ConvertFrom-Json
+            Remove-Item -LiteralPath $worker.ResultPath -Force -ErrorAction SilentlyContinue
+            Remove-Job -Job $worker.Job -Force -ErrorAction SilentlyContinue
+            $result
+        }
     )
 
     $stateDirectory = Split-Path -Parent $StateFile

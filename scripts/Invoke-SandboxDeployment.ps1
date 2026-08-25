@@ -42,6 +42,14 @@ param(
 
     [switch]$Deploy,
 
+    # Runs the host and Azure checks, then stops before any stage that costs time or money.
+    [switch]$PreflightOnly,
+
+    [switch]$SkipAzurePreflight,
+
+    # Purging is irreversible, so a blocking vault is reported rather than removed unless this is set.
+    [switch]$PurgeSoftDeletedKeyVault,
+
     [ValidateSet('Images', 'NestedVMs', 'GuestDisks', 'LevelOne', 'ManagementPlane', 'ArcRegistration', 'Validation', 'Deployment')]
     [string[]]$ForceStage = @(),
 
@@ -144,6 +152,24 @@ if ($deploymentCredential.Password.Length -lt 14) {
 New-Item -Path $stateRoot -ItemType Directory -Force | Out-Null
 
 & (Join-Path $PSScriptRoot 'Test-HostReadiness.ps1')
+
+if (-not $SkipAzurePreflight) {
+    & (Join-Path $PSScriptRoot 'Test-DeploymentPreflight.ps1') `
+        -ConfigurationPath $labConfigurationPath `
+        -PurgeSoftDeletedKeyVault:$PurgeSoftDeletedKeyVault
+}
+
+if ($PreflightOnly) {
+    Write-Information 'Preflight only: every check passed and no stage was started.' -InformationAction Continue
+    return
+}
+
+# A resumed run that still has downstream state but has lost its parent images would silently rebuild
+# them and then fail later against differencing disks that no longer have a parent.
+$imagesVerified = Test-ImageState -StatePath (Join-Path $stateRoot 'images.json')
+if (-not $imagesVerified -and (Test-Path -LiteralPath (Join-Path $stateRoot 'nested-vms.json'))) {
+    throw 'Nested VM state exists but the verified parent images are missing or no longer match their recorded hashes. Restore V:\VHDs or remove the nested VMs and their state before resuming.'
+}
 
 if ('Images' -in $forcedStages -and (Test-Path -LiteralPath (Join-Path $stateRoot 'nested-vms.json'))) {
     throw 'Parent images cannot be replaced after differencing disks exist. Remove the nested VMs and their state before forcing Images.'
@@ -271,7 +297,8 @@ if ('GuestDisks' -in $forcedStages -and (Test-Path -LiteralPath (Join-Path $stat
                 -Mode Validate `
                 -ConfigurationPath $labConfigurationPath `
                 -LocalAdministratorCredential $localCredential `
-                -LcmCredential $deploymentCredential
+                -LcmCredential $deploymentCredential `
+                -PurgeSoftDeletedKeyVault:$PurgeSoftDeletedKeyVault
         }
     }
 
@@ -284,7 +311,8 @@ if ('GuestDisks' -in $forcedStages -and (Test-Path -LiteralPath (Join-Path $stat
                 -Mode Deploy `
                 -ConfigurationPath $labConfigurationPath `
                 -LocalAdministratorCredential $localCredential `
-                -LcmCredential $deploymentCredential
+                -LcmCredential $deploymentCredential `
+                -PurgeSoftDeletedKeyVault:$PurgeSoftDeletedKeyVault
         }
     }
 

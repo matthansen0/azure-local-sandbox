@@ -203,6 +203,11 @@ The setting persists across restarts. Note that SMB is a poor probe for this fau
 between guests can report a collapse even when the underlying TCP path is healthy, so measure with
 a plain HTTP download or a raw TCP stream.
 
+`Register-AzureLocalNodes.ps1` also retries `Invoke-AzStackHciArcInitialization` up to
+`-ArcInitializationAttempts` times, defaulting to 3, when and only when the failure is
+`PrepareKvaTimeoutError`. That covers a download that times out for an unrelated transient reason. It is
+not a substitute for the offload fix above: if throughput is collapsed, every attempt times out.
+
 ### Azure Local provider principal is not found
 
 Register `Microsoft.AzureStackHCI`, then retry, or provide the tenant-specific object ID:
@@ -263,11 +268,16 @@ Review the deterministic `azure-local-validate` deployment in the sandbox resour
 
 The key vault name is derived from the subscription ID and resource group name, so it is identical every time you rebuild the same sandbox. Azure always soft-deletes key vaults, so deleting the resource group leaves the old vault reserving that name for its 30 day retention window and the next validation fails to create it.
 
-`Deploy-AzureLocal.ps1` checks for this before submitting the deployment and prints the vault name to purge. Purge protection is not enabled, so recovery is:
+`Test-DeploymentPreflight.ps1` checks for this at the start of a run, hours before the cloud deployment
+stage would hit it, and prints the vault name to purge. `Deploy-AzureLocal.ps1` repeats the check before
+submitting. Purge protection is not enabled, so recovery is:
 
 ```powershell
 az keyvault purge --name <vault-name> --location <azure-location>
 ```
+
+Passing `-PurgeSoftDeletedKeyVault` to `Invoke-SandboxDeployment.ps1` purges it automatically instead.
+Purging is irreversible, so it never happens without that switch.
 
 The managed identity is scoped to the resource group and may not be able to read subscription-level deleted vaults, in which case the preflight check is skipped and Azure reports the conflict during validation instead. Run `az keyvault list-deleted --resource-type vault` from your workstation to confirm.
 

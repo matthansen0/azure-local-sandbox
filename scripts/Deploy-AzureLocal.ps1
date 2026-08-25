@@ -26,6 +26,9 @@ param(
 
     [uri]$TemplateUri,
 
+    # Purging is irreversible, so a blocking vault is reported rather than removed unless this is set.
+    [switch]$PurgeSoftDeletedKeyVault,
+
     [switch]$GenerateParametersOnly
 )
 
@@ -339,7 +342,22 @@ $deletedVaultResponse = Invoke-AzRestMethod `
     -Path "/subscriptions/$($context.subscriptionId)/providers/Microsoft.KeyVault/locations/$($context.azureLocation)/deletedVaults/$($deploymentParameters.keyVaultName)?api-version=2023-07-01" `
     -ErrorAction SilentlyContinue
 if ($deletedVaultResponse -and $deletedVaultResponse.StatusCode -eq 200) {
-    throw "Key vault '$($deploymentParameters.keyVaultName)' is soft-deleted in '$($context.azureLocation)' and blocks redeployment. Purge it first: az keyvault purge --name $($deploymentParameters.keyVaultName) --location $($context.azureLocation)"
+    $purgeInstruction = "Purge it first: az keyvault purge --name $($deploymentParameters.keyVaultName) --location $($context.azureLocation)"
+    if (-not $PurgeSoftDeletedKeyVault) {
+        throw "Key vault '$($deploymentParameters.keyVaultName)' is soft-deleted in '$($context.azureLocation)' and blocks redeployment. $purgeInstruction"
+    }
+
+    Write-Step "Purging the soft-deleted key vault '$($deploymentParameters.keyVaultName)'..."
+    $purgeResponse = Invoke-AzRestMethod `
+        -Method POST `
+        -Path "/subscriptions/$($context.subscriptionId)/providers/Microsoft.KeyVault/locations/$($context.azureLocation)/deletedVaults/$($deploymentParameters.keyVaultName)/purge?api-version=2023-07-01" `
+        -ErrorAction SilentlyContinue
+    if (-not $purgeResponse -or $purgeResponse.StatusCode -notin @(200, 202, 204)) {
+        $purgeStatus = if ($purgeResponse) { $purgeResponse.StatusCode } else { 'no response' }
+        throw "Purging key vault '$($deploymentParameters.keyVaultName)' failed with status '$purgeStatus'. The managed identity likely lacks Microsoft.KeyVault/locations/deletedVaults/purge/action. $purgeInstruction"
+    }
+
+    Write-Step "Key vault '$($deploymentParameters.keyVaultName)' purged."
 }
 
 New-Item -Path $ArtifactsPath -ItemType Directory -Force | Out-Null

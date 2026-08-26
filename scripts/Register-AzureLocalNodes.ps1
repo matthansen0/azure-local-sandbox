@@ -30,6 +30,20 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+function Get-MachineLocalCredential {
+    # Azure Local joins the nodes to the domain, after which an unqualified user name authenticates
+    # against the domain instead of the node's own SAM database and PowerShell Direct rejects it.
+    param([Parameter(Mandatory)][PSCredential]$Credential)
+
+    if ($Credential.UserName -match '[\\@]') {
+        return $Credential
+    }
+
+    return New-Object System.Management.Automation.PSCredential(".\$($Credential.UserName)", $Credential.Password)
+}
+
+$LocalAdministratorCredential = Get-MachineLocalCredential -Credential $LocalAdministratorCredential
+
 function Write-Step {
     param(
         [Parameter(Mandatory)]

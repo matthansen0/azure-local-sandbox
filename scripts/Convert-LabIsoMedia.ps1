@@ -47,6 +47,12 @@ param(
 
     [string]$WorkerResultPath,
 
+    [ValidatePattern('^[D-Zd-z]$')]
+    [string]$EfiDriveLetter,
+
+    [ValidatePattern('^[D-Zd-z]$')]
+    [string]$WindowsDriveLetter,
+
     [switch]$ListImages,
 
     [switch]$Force
@@ -66,7 +72,13 @@ function Write-Step {
 }
 
 function Get-FreeDriveLetter {
-    $usedDriveLetters = @(Get-Volume | Where-Object DriveLetter | Select-Object -ExpandProperty DriveLetter)
+    param(
+        # Letters already handed out to a sibling conversion worker are not visible as volumes yet.
+        [string[]]$Exclude = @()
+    )
+
+    $usedDriveLetters = @(Get-Volume | Where-Object DriveLetter | Select-Object -ExpandProperty DriveLetter) +
+        @($Exclude | ForEach-Object { [char]$_ })
     foreach ($driveLetter in [char[]](90..70)) {
         if ($driveLetter -notin $usedDriveLetters) {
             return [string]$driveLetter
@@ -164,6 +176,10 @@ function Convert-InstallImageToVhdx {
         [Parameter(Mandatory)]
         [int]$StallMinutes,
 
+        [string]$RequestedEfiDriveLetter,
+
+        [string]$RequestedWindowsDriveLetter,
+
         [switch]$Overwrite
     )
 
@@ -186,7 +202,7 @@ function Convert-InstallImageToVhdx {
         Remove-Item -LiteralPath $DestinationPath -Force
     }
 
-    $efiDriveLetter = Get-FreeDriveLetter
+    $efiDriveLetter = if ($RequestedEfiDriveLetter) { $RequestedEfiDriveLetter } else { Get-FreeDriveLetter }
     $windowsDriveLetter = $null
     $conversionSucceeded = $false
     $mountedVhd = $null
@@ -209,7 +225,7 @@ function Convert-InstallImageToVhdx {
             -Size 16MB `
             -GptType '{e3c9e316-0b5c-4db8-817d-f92df00215ae}' | Out-Null
 
-        $windowsDriveLetter = Get-FreeDriveLetter
+        $windowsDriveLetter = if ($RequestedWindowsDriveLetter) { $RequestedWindowsDriveLetter } else { Get-FreeDriveLetter -Exclude $efiDriveLetter }
         $windowsPartition = New-Partition `
             -DiskNumber $disk.Number `
             -UseMaximumSize `
@@ -278,12 +294,19 @@ function Convert-InstallImageToVhdx {
 
         Write-Step "Applied image index $ImageIndex in $($applyStopwatch.Elapsed.ToString('hh\:mm\:ss'))."
 
-        $bcdOutput = & "${windowsDriveLetter}:\Windows\System32\bcdboot.exe" `
+        # The host's bcdboot is used rather than the one in the freshly applied image: launching
+        # bcdboot.exe out of an offline image directory resolves its side-by-side dependencies against
+        # the live system root and terminates with 0xC0E90002 before writing any output. The outer host
+        # and both supported media are build 26100, so the host copy writes the same boot files.
+        $bcdOutput = & "$env:SystemRoot\System32\bcdboot.exe" `
             "${windowsDriveLetter}:\Windows" `
             /s "${efiDriveLetter}:" `
-            /f UEFI
-        if ($LASTEXITCODE -ne 0) {
-            throw "BCDBoot failed: $($bcdOutput -join [Environment]::NewLine)"
+            /f UEFI 2>&1
+        $bcdExitCode = $LASTEXITCODE
+        if ($bcdExitCode -ne 0) {
+            $bcdDetail = ($bcdOutput | Out-String).Trim()
+            if (-not $bcdDetail) { $bcdDetail = 'BCDBoot produced no output.' }
+            throw "BCDBoot failed with exit code ${bcdExitCode}: $bcdDetail"
         }
 
         $conversionSucceeded = $true
@@ -313,9 +336,18 @@ function Convert-InstallImageToVhdx {
 $windowsInstallImage = $null
 $azureLocalInstallImage = $null
 
+# A worker mounts only its own media. Mounting both would make the first worker to finish dismount the
+# ISO the other one is still applying from.
+$useWindowsMedia = -not $Worker -or $Worker -eq 'WindowsServer'
+$useAzureLocalMedia = -not $Worker -or $Worker -eq 'AzureLocal'
+
 try {
-    $windowsInstallImage = Get-IsoInstallImage -IsoPath $WindowsServerIsoPath
-    $azureLocalInstallImage = Get-IsoInstallImage -IsoPath $AzureLocalIsoPath
+    if ($useWindowsMedia) {
+        $windowsInstallImage = Get-IsoInstallImage -IsoPath $WindowsServerIsoPath
+    }
+    if ($useAzureLocalMedia) {
+        $azureLocalInstallImage = Get-IsoInstallImage -IsoPath $AzureLocalIsoPath
+    }
 
     if ($ListImages) {
         $imageList = @(
@@ -353,12 +385,18 @@ try {
     }
 
     Write-Step 'Verifying the publisher SHA-256 of both ISOs. Large media takes several minutes...'
-    $windowsSourceHash = Assert-SourceHash `
-        -Path $windowsInstallImage.IsoPath `
-        -ExpectedSha256 $WindowsServerIsoSha256
-    $azureLocalSourceHash = Assert-SourceHash `
-        -Path $azureLocalInstallImage.IsoPath `
-        -ExpectedSha256 $AzureLocalIsoSha256
+    $windowsSourceHash = $null
+    $azureLocalSourceHash = $null
+    if ($useWindowsMedia) {
+        $windowsSourceHash = Assert-SourceHash `
+            -Path $windowsInstallImage.IsoPath `
+            -ExpectedSha256 $WindowsServerIsoSha256
+    }
+    if ($useAzureLocalMedia) {
+        $azureLocalSourceHash = Assert-SourceHash `
+            -Path $azureLocalInstallImage.IsoPath `
+            -ExpectedSha256 $AzureLocalIsoSha256
+    }
 
     if ($Force -and (Test-Path -LiteralPath 'C:\AzureLocalSandbox\State\nested-vms.json')) {
         throw 'ISO-derived parent images cannot be replaced after nested differencing disks exist.'
@@ -396,6 +434,8 @@ try {
                     -DiskSizeBytes $BootDiskSizeBytes `
                     -ExpectedImageNamePattern $request.ImageNamePattern `
                     -StallMinutes $ApplyStallMinutes `
+                    -RequestedEfiDriveLetter $EfiDriveLetter `
+                    -RequestedWindowsDriveLetter $WindowsDriveLetter `
                     -Overwrite:$Force
 
                 if ($WorkerResultPath) {
@@ -407,61 +447,35 @@ try {
         return
     }
 
-    $workerJobs = @(
-        foreach ($request in $conversionRequests) {
-            $workerResultPath = Join-Path $env:TEMP "AzureLocalSandbox-$($request.Name)-$([guid]::NewGuid()).json"
-            $workerParameters = @{
-                WindowsServerIsoPath   = $WindowsServerIsoPath
-                AzureLocalIsoPath      = $AzureLocalIsoPath
-                WindowsServerIsoSha256 = $WindowsServerIsoSha256
-                AzureLocalIsoSha256    = $AzureLocalIsoSha256
-                WindowsServerImageIndex = $WindowsServerImageIndex
-                AzureLocalImageIndex    = $AzureLocalImageIndex
-                BootDiskSizeBytes      = $BootDiskSizeBytes
-                ApplyStallMinutes      = $ApplyStallMinutes
-                DestinationDirectory   = $DestinationDirectory
-                Worker                 = $request.Name
-                WorkerResultPath       = $workerResultPath
-                Force                  = [bool]$Force
-            }
+    # Each conversion formats two temporary partitions, so the letters are reserved up front rather than
+    # resolved again inside the conversion.
+    $reservedDriveLetters = @()
+    foreach ($request in $conversionRequests) {
+        $requestEfiDriveLetter = Get-FreeDriveLetter -Exclude $reservedDriveLetters
+        $reservedDriveLetters += $requestEfiDriveLetter
+        $requestWindowsDriveLetter = Get-FreeDriveLetter -Exclude $reservedDriveLetters
+        $reservedDriveLetters += $requestWindowsDriveLetter
 
-            [pscustomobject]@{
-                Job        = Start-Job -ArgumentList (Join-Path $PSScriptRoot 'Convert-LabIsoMedia.ps1'), $workerParameters -ScriptBlock {
-                    param(
-                        [string]$ScriptPath,
-                        [hashtable]$Parameters
-                    )
+        $request | Add-Member -NotePropertyName 'EfiDriveLetter' -NotePropertyValue $requestEfiDriveLetter
+        $request | Add-Member -NotePropertyName 'WindowsDriveLetter' -NotePropertyValue $requestWindowsDriveLetter
+    }
 
-                    & $ScriptPath @Parameters
-                    if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
-                        throw "Image conversion worker exited with code $LASTEXITCODE."
-                    }
-                }
-                ResultPath = $workerResultPath
-                Name       = $request.Name
-            }
-        }
-    )
-
+    # Conversions run one at a time in this process. A VHDX mounted from a Start-Job worker, or from a
+    # second concurrent conversion, drops into ERROR_VHD_INVALID_STATE (0xC03A001C) about 30 seconds
+    # into the DISM apply and takes the apply down with it.
     $images = @(
-        foreach ($worker in $workerJobs) {
-            Wait-Job -Job $worker.Job | Out-Null
-            $workerOutput = Receive-Job -Job $worker.Job -ErrorAction SilentlyContinue
-            if ($worker.Job.State -ne 'Completed') {
-                $workerError = if ($workerOutput) { ($workerOutput | Out-String).Trim() } else { 'No worker output.' }
-                Remove-Job -Job $worker.Job -Force -ErrorAction SilentlyContinue
-                throw "$($worker.Name) image conversion worker failed: $workerError"
-            }
-
-            if (-not (Test-Path -LiteralPath $worker.ResultPath)) {
-                Remove-Job -Job $worker.Job -Force -ErrorAction SilentlyContinue
-                throw "$($worker.Name) image conversion worker completed without writing its result."
-            }
-
-            $result = Get-Content -LiteralPath $worker.ResultPath -Raw | ConvertFrom-Json
-            Remove-Item -LiteralPath $worker.ResultPath -Force -ErrorAction SilentlyContinue
-            Remove-Job -Job $worker.Job -Force -ErrorAction SilentlyContinue
-            $result
+        foreach ($request in $conversionRequests) {
+            Write-Step "Converting $($request.Name) media..."
+            Convert-InstallImageToVhdx `
+                -InstallImage $request.InstallImage `
+                -ImageIndex $request.ImageIndex `
+                -DestinationPath $request.DestinationPath `
+                -DiskSizeBytes $BootDiskSizeBytes `
+                -ExpectedImageNamePattern $request.ImageNamePattern `
+                -StallMinutes $ApplyStallMinutes `
+                -RequestedEfiDriveLetter $request.EfiDriveLetter `
+                -RequestedWindowsDriveLetter $request.WindowsDriveLetter `
+                -Overwrite:$Force
         }
     )
 

@@ -59,6 +59,51 @@ function Add-PreflightCheck {
     })
 }
 
+function Install-NuGetProvider {
+    # PowerShellGet raises an interactive bootstrap prompt when the provider binary is older than the
+    # version it requires, which deadlocks an unattended run.
+    # .NET 4.x defaults to SSL3/TLS1.0 here, and the provider CDN and PSGallery only accept TLS 1.2.
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $installedProvider = @(
+        Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue |
+            Where-Object { $_.Version -ge [version]'2.8.5.208' }
+    )
+    if ($installedProvider.Count -eq 0) {
+        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.208 -Force -ForceBootstrap | Out-Null
+    }
+}
+
+function Install-RequiredAzModule {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Version
+    )
+
+    if (Get-Module -ListAvailable -Name $Name | Where-Object Version -eq ([version]$Version)) {
+        return
+    }
+
+    Write-Step "Installing PowerShell module $Name $Version from PSGallery..."
+    Install-NuGetProvider
+    $originalPolicy = (Get-PSRepository -Name PSGallery).InstallationPolicy
+    try {
+        if ($originalPolicy -ne 'Trusted') {
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+        }
+        Install-Module `
+            -Name $Name `
+            -RequiredVersion $Version `
+            -Repository PSGallery `
+            -Scope CurrentUser `
+            -Force
+    }
+    finally {
+        if ($originalPolicy -ne 'Trusted') {
+            Set-PSRepository -Name PSGallery -InstallationPolicy $originalPolicy
+        }
+    }
+}
+
 function Get-StableSuffix {
     # Mirrors Get-StableSuffix in Deploy-AzureLocal.ps1; CloudContract.Tests.ps1 asserts they agree.
     param([Parameter(Mandatory)][string]$InputValue)
@@ -129,6 +174,9 @@ if ($missingContextFields.Count -gt 0) {
     throw 'The deployment context is incomplete, so the Azure checks cannot run.'
 }
 
+Install-RequiredAzModule `
+    -Name $dependencies.PowerShellModules.AzAccounts.Name `
+    -Version $dependencies.PowerShellModules.AzAccounts.Version
 Import-Module `
     -Name $dependencies.PowerShellModules.AzAccounts.Name `
     -RequiredVersion $dependencies.PowerShellModules.AzAccounts.Version `
@@ -181,7 +229,7 @@ if ($signedIn) {
         -ResourceGroupName $context.resourceGroupName
     $deletedVaultResponse = Invoke-AzRestMethod `
         -Method GET `
-        -Path "/subscriptions/$($context.subscriptionId)/providers/Microsoft.KeyVault/locations/$($context.azureLocation)/deletedVaults/$keyVaultName?api-version=2023-07-01" `
+        -Path "/subscriptions/$($context.subscriptionId)/providers/Microsoft.KeyVault/locations/$($context.azureLocation)/deletedVaults/${keyVaultName}?api-version=2023-07-01" `
         -ErrorAction SilentlyContinue
     $vaultBlocked = $deletedVaultResponse -and $deletedVaultResponse.StatusCode -eq 200
     $purgeInstruction = "Purge it first: az keyvault purge --name $keyVaultName --location $($context.azureLocation)"

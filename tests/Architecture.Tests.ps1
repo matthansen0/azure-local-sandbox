@@ -500,10 +500,12 @@ Describe 'Host performance contract' {
         $hostTemplate | Should -Match 'param dataDiskSizeGiB int = 1024'
     }
 
-    It 'launches ISO conversions as isolated workers and reads file-based results' {
+    It 'converts ISO media one at a time in the calling process' {
+        # A VHDX mounted from a Start-Job worker, or a second concurrent conversion, drops into
+        # ERROR_VHD_INVALID_STATE about 30 seconds into the DISM apply.
         $converterSource = Get-Content (Join-Path $repoRoot 'scripts/Convert-LabIsoMedia.ps1') -Raw
-        $converterSource | Should -Match "Start-Job -ArgumentList"
-        $converterSource | Should -Match "WorkerResultPath"
-        $converterSource | Should -Match "ConvertFrom-Json"
+        $converterSource | Should -Not -Match 'Start-Job'
+        $converterSource | Should -Match 'foreach \(\$request in \$conversionRequests\)'
+        $converterSource | Should -Match 'Convert-InstallImageToVhdx'
     }
 }

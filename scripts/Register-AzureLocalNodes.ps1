@@ -42,6 +42,8 @@ function Write-Step {
 function Install-NuGetProvider {
     # PowerShellGet raises an interactive bootstrap prompt when the provider binary is older than the
     # version it requires, which deadlocks an unattended run.
+    # .NET 4.x defaults to SSL3/TLS1.0 here, and the provider CDN and PSGallery only accept TLS 1.2.
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     $installedProvider = @(
         Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue |
             Where-Object { $_.Version -ge [version]'2.8.5.208' }

@@ -11,6 +11,8 @@ param(
     [Parameter(Mandatory)]
     [PSCredential]$LocalAdministratorCredential,
 
+    [PSCredential]$DomainAdministratorCredential,
+
     [string]$ConfigurationPath = (Join-Path $PSScriptRoot '..\config\lab.psd1'),
 
     [switch]$RequireAzureLocalDeployment
@@ -32,6 +34,39 @@ function Get-MachineLocalCredential {
 }
 
 $LocalAdministratorCredential = Get-MachineLocalCredential -Credential $LocalAdministratorCredential
+
+function Invoke-NodeCommand {
+    # Cloud deployment applies the Azure Local security baseline, which disables the node's local
+    # administrator account, so a deployed node only answers to the domain credential. A node that
+    # is merely validated still only has the local one.
+    param(
+        [Parameter(Mandatory)][string]$VMName,
+        [Parameter(Mandatory)][scriptblock]$ScriptBlock,
+        [object[]]$ArgumentList = @()
+    )
+
+    $candidates = @($LocalAdministratorCredential)
+    if ($DomainAdministratorCredential) {
+        $candidates += $DomainAdministratorCredential
+    }
+
+    $lastError = $null
+    foreach ($candidate in $candidates) {
+        try {
+            return Invoke-Command `
+                -VMName $VMName `
+                -Credential $candidate `
+                -ArgumentList $ArgumentList `
+                -ScriptBlock $ScriptBlock `
+                -ErrorAction Stop
+        }
+        catch {
+            $lastError = $_
+        }
+    }
+
+    throw $lastError
+}
 
 $results = [Collections.Generic.List[object]]::new()
 
@@ -124,15 +159,21 @@ foreach ($vmConfiguration in @($configuration.VMs)) {
 
 foreach ($nodeConfiguration in @($configuration.VMs | Where-Object Role -eq 'AzureLocalNode')) {
     try {
-        $nodeResult = Invoke-Command `
+        $nodeResult = Invoke-NodeCommand `
             -VMName $nodeConfiguration.Name `
-            -Credential $LocalAdministratorCredential `
             -ArgumentList $configuration.Domain.Fqdn, $configuration.Domain.DomainControllerIp `
             -ScriptBlock {
                 param([string]$DomainFqdn, [string]$DomainControllerIp)
 
                 $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem
-                $dnsServers = @((Get-DnsClientServerAddress -InterfaceAlias 'FABRIC' -AddressFamily IPv4).ServerAddresses)
+                # Deployment moves the management IP onto a SET team vNIC, so FABRIC no longer carries
+                # the DNS configuration and querying it by name fails outright.
+                $dnsServers = @(
+                    Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                        ForEach-Object { $_.ServerAddresses } |
+                        Where-Object { $_ } |
+                        Select-Object -Unique
+                )
                 $azureResourceManagerHost = 'management.azure.com'
                 $requiredAdapterNames = @('FABRIC', 'StorageA', 'StorageB')
                 [pscustomobject]@{
@@ -163,9 +204,8 @@ foreach ($nodeConfiguration in @($configuration.VMs | Where-Object Role -eq 'Azu
 if ($RequireAzureLocalDeployment) {
     $firstNodeName = @($configuration.VMs | Where-Object Role -eq 'AzureLocalNode')[0].Name
     try {
-        $quorum = Invoke-Command `
+        $quorum = Invoke-NodeCommand `
             -VMName $firstNodeName `
-            -Credential $LocalAdministratorCredential `
             -ArgumentList $configuration.Cluster.Name `
             -ScriptBlock {
                 param([string]$ClusterName)
@@ -263,10 +303,12 @@ try {
     }
 
     if ($RequireAzureLocalDeployment) {
+        # Get-AzResource resolves this provider only by full resource id; the -ResourceType plus
+        # -Name form returns nothing and the cluster reads as missing.
+        $clusterResourceId = '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.AzureStackHCI/clusters/{2}' -f
+            $context.subscriptionId, $context.resourceGroupName, $configuration.Cluster.Name
         $clusterResource = Get-AzResource `
-            -ResourceGroupName $context.resourceGroupName `
-            -ResourceType 'Microsoft.AzureStackHCI/clusters' `
-            -Name $configuration.Cluster.Name `
+            -ResourceId $clusterResourceId `
             -ExpandProperties `
             -ErrorAction SilentlyContinue
         $clusterProvisioningState = if ($clusterResource) {

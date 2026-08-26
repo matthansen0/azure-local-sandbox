@@ -320,6 +320,7 @@ if ('GuestDisks' -in $forcedStages -and (Test-Path -LiteralPath (Join-Path $stat
         & (Join-Path $PSScriptRoot 'Test-SandboxDeployment.ps1') `
             -ConfigurationPath $labConfigurationPath `
             -LocalAdministratorCredential $localCredential `
+            -DomainAdministratorCredential $domainCredential `
             -RequireAzureLocalDeployment:$Deploy
     }
 

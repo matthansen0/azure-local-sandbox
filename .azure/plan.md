@@ -1,6 +1,6 @@
 # Azure Deployment Plan
 
-> **Status:** Validated
+> **Status:** Deployed
 
 Generated: 2026-08-26T15:05:00Z
 
@@ -93,10 +93,10 @@ Generated: 2026-08-26T15:05:00Z
 - [x] Record validation proof below
 
 ### Phase 4: Deployment
-- [ ] Invoke azure-deploy skill
-- [ ] Deployment successful
-- [ ] Verify VM power state, bootstrap extension, Bastion access, and monitoring association
-- [ ] Update plan status to `Deployed`
+- [x] Invoke azure-deploy skill
+- [x] Deployment successful
+- [x] Verify VM power state, bootstrap extension, Bastion access, and monitoring association
+- [x] Update plan status to `Deployed`
 
 ---
 
@@ -125,8 +125,22 @@ Generated: 2026-08-26T15:05:00Z
 
 ## 9. Next Steps
 
-> Current: Validated and ready for deployment
+> Current: Deployed and ready for login
 
-1. Deploy only the validated monitoring module.
-2. Verify the VM, bootstrap extension, Bastion route, and monitoring association.
-3. Rerun the original subscription deployment from Cloud Shell to record top-level success.
+1. Connect to `LocalBox-Client` through Azure Bastion as `localadmin`.
+2. Run the **Azure Local Sandbox Setup** launcher from the public desktop.
+3. Optionally rerun the full subscription deployment only to create a successful top-level deployment record; the live resources are already complete.
+
+---
+
+## 10. Deployment Proof
+
+| Check | Result |
+|-------|--------|
+| Monitoring resume deployment | `localbox-monitoring-resume-20260826-110921`: `Succeeded` at `2026-08-26T15:09:53Z` |
+| VM | Provisioning succeeded; running |
+| VM extensions | `Bootstrap`: `Succeeded`; `AzureMonitorWindowsAgent`: `Succeeded` |
+| Monitoring | `localbox-host-dcr`: `Succeeded`; `localbox-host-dcra` associated with the VM |
+| Bastion | `localbox-bastion`: Developer SKU, `Succeeded` |
+| Host readiness | All 15 repository readiness checks passed; no pending restart |
+| Login readiness | RDP enabled; `TermService` running; firewall enabled; desktop launcher present |

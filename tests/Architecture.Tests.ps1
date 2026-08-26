@@ -304,6 +304,11 @@ Describe 'Azure CLI invocation contract' {
                 $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
                 $node.Name -eq 'Get-InstalledBicepVersion'
             }, $true)
+        $sandboxCreateFunction = $deployAst.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq 'Invoke-SandboxCreate'
+            }, $true)
         $bicepVersionMatch = $bicepVersionFunction.Body.Find({
                 param($node)
                 $node -is [System.Management.Automation.Language.BinaryExpressionAst] -and
@@ -352,6 +357,17 @@ Describe 'Azure CLI invocation contract' {
         @($commonArguments |
                 Select-Object -Skip ($parametersIndex + 1) |
                 Where-Object { $_ -like '--*' }) | Should -BeNullOrEmpty
+    }
+
+    It 'retries only while the Event table propagates to the data collection rule service' {
+        $sandboxCreateFunction | Should -Not -BeNullOrEmpty
+        $sandboxCreateSource = $sandboxCreateFunction.Extent.Text
+
+        $sandboxCreateSource | Should -Match '\[int\]\$MaxAttempts = 5'
+        $sandboxCreateSource | Should -Match 'InvalidOutputTable\.\*Microsoft-Event\.\*sandboxWorkspace'
+        $sandboxCreateSource |
+            Should -Match 'if \(-not \$isEventTablePropagationDelay -or \$attempt -eq \$MaxAttempts\)'
+        $sandboxCreateSource | Should -Match 'Start-Sleep -Seconds \$retryDelaySeconds'
     }
 
     It 'passes the auto-selected Bastion SKU through to the template' {

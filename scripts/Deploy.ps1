@@ -591,6 +591,34 @@ function Invoke-SandboxTemplate {
     }
 }
 
+function Invoke-SandboxCreate {
+    param(
+        [ValidateRange(1, 10)]
+        [int]$MaxAttempts = 5
+    )
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            return Invoke-SandboxTemplate `
+                -Operation @('create') `
+                -ExtraArguments @('--output', 'json') `
+                -ParseJson
+        }
+        catch {
+            # The workspace table PUT can finish before the DCR service sees its built-in schema.
+            $isEventTablePropagationDelay =
+                $_.Exception.Message -match '(?is)InvalidOutputTable.*Microsoft-Event.*sandboxWorkspace'
+            if (-not $isEventTablePropagationDelay -or $attempt -eq $MaxAttempts) {
+                throw
+            }
+
+            $retryDelaySeconds = [math]::Min(15 * [math]::Pow(2, $attempt - 1), 120)
+            Write-Warning "The Event table is not yet available to Azure Monitor. Retrying the deployment in $retryDelaySeconds seconds (attempt $($attempt + 1) of $MaxAttempts)."
+            Start-Sleep -Seconds $retryDelaySeconds
+        }
+    }
+}
+
 Write-Step 'Validating subscription deployment...'
 Invoke-SandboxTemplate -Operation @('validate') -ExtraArguments @('--output', 'none') |
     Out-Null
@@ -605,10 +633,7 @@ switch ($Mode) {
     }
     'Deploy' {
         Write-Step 'Creating Azure Local sandbox host. The template takes roughly 20-30 minutes; track progress in the portal deployment blade.'
-        $deployment = Invoke-SandboxTemplate `
-            -Operation @('create') `
-            -ExtraArguments @('--output', 'json') `
-            -ParseJson
+        $deployment = Invoke-SandboxCreate
 
         Write-Step 'Deployment completed.'
         $deployment.properties.outputs | ConvertTo-Json -Depth 10

@@ -52,7 +52,8 @@ resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   }
 }
 
-// DCR validation resolves built-in streams against workspace tables, which can lag workspace creation.
+// DCR validation resolves built-in streams against workspace tables. Deploy.ps1 retries the exact
+// InvalidOutputTable race because the DCR service can lag after this resource reaches Succeeded.
 resource eventTable 'Microsoft.OperationalInsights/workspaces/tables@2025-02-01' = {
   parent: workspace
   name: 'Event'

@@ -70,6 +70,13 @@ function Install-NuGetProvider {
     )
     if ($installedProvider.Count -eq 0) {
         Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.208 -Force -ForceBootstrap | Out-Null
+        $installedProvider = @(
+            Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue |
+                Where-Object { $_.Version -ge [version]'2.8.5.208' }
+        )
+        if ($installedProvider.Count -eq 0) {
+            throw 'The NuGet package provider could not be installed, so Install-Module would stop for an interactive prompt.'
+        }
     }
 }
 

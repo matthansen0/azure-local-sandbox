@@ -940,34 +940,72 @@ exit /b 0
                     }
 
                     if (-not $ouExists -or -not $lcmUser) {
-                        # PowerShellGet raises an interactive bootstrap prompt when the provider binary is
-                        # older than the version it requires, and nothing can answer it over PowerShell Direct.
-                        # .NET 4.x defaults to SSL3/TLS1.0 here, and the provider CDN and PSGallery only accept TLS 1.2.
-                        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-                        $installedProvider = @(
-                            Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue |
-                                Where-Object { $_.Version -ge [version]'2.8.5.208' }
-                        )
-                        if ($installedProvider.Count -eq 0) {
-                            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.208 -Force -ForceBootstrap | Out-Null
-                        }
-                        $originalPolicy = (Get-PSRepository -Name PSGallery).InstallationPolicy
-                        try {
-                            if ($originalPolicy -ne 'Trusted') {
-                                Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+                        # The gallery install runs in a background job on purpose. A job has no
+                        # interactive host, so the PowerShellGet NuGet bootstrap prompt fails instead of
+                        # blocking forever behind PowerShell Direct, and the wait bounds a stalled
+                        # download. .NET 4.x also defaults to SSL3/TLS1.0, which PSGallery rejects.
+                        $installJob = Start-Job `
+                            -ArgumentList $AdPreparationModule.Name, $AdPreparationModule.Version `
+                            -ScriptBlock {
+                                param(
+                                    [string]$ModuleName,
+                                    [string]$ModuleVersion
+                                )
+
+                                $ErrorActionPreference = 'Stop'
+                                $ProgressPreference = 'SilentlyContinue'
+                                [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
+                                $installedProvider = @(
+                                    Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue |
+                                        Where-Object { $_.Version -ge [version]'2.8.5.208' }
+                                )
+                                if ($installedProvider.Count -eq 0) {
+                                    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.208 -Force -ForceBootstrap | Out-Null
+                                    $installedProvider = @(
+                                        Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue |
+                                            Where-Object { $_.Version -ge [version]'2.8.5.208' }
+                                    )
+                                    if ($installedProvider.Count -eq 0) {
+                                        throw 'The NuGet package provider is still missing after a forced bootstrap.'
+                                    }
+                                }
+
+                                $originalPolicy = (Get-PSRepository -Name PSGallery).InstallationPolicy
+                                try {
+                                    if ($originalPolicy -ne 'Trusted') {
+                                        Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+                                    }
+                                    Install-Module `
+                                        -Name $ModuleName `
+                                        -RequiredVersion $ModuleVersion `
+                                        -Repository PSGallery `
+                                        -Scope CurrentUser `
+                                        -Force
+                                }
+                                finally {
+                                    if ($originalPolicy -ne 'Trusted') {
+                                        Set-PSRepository -Name PSGallery -InstallationPolicy $originalPolicy
+                                    }
+                                }
                             }
-                            Install-Module `
-                                -Name $AdPreparationModule.Name `
-                                -RequiredVersion $AdPreparationModule.Version `
-                                -Repository PSGallery `
-                                -Scope CurrentUser `
-                                -Force
+
+                        $installTimeoutSeconds = 900
+                        if (-not (Wait-Job -Job $installJob -Timeout $installTimeoutSeconds)) {
+                            Stop-Job -Job $installJob -ErrorAction SilentlyContinue
+                            Remove-Job -Job $installJob -Force -ErrorAction SilentlyContinue
+                            throw "Installing '$($AdPreparationModule.Name)' on '$env:COMPUTERNAME' did not finish within $installTimeoutSeconds seconds."
                         }
-                        finally {
-                            if ($originalPolicy -ne 'Trusted') {
-                                Set-PSRepository -Name PSGallery -InstallationPolicy $originalPolicy
-                            }
+
+                        $installOutput = Receive-Job -Job $installJob -ErrorAction SilentlyContinue
+                        $installState = $installJob.State
+                        $installReason = $installJob.ChildJobs | ForEach-Object { $_.Error | ForEach-Object { $_.ToString() } }
+                        Remove-Job -Job $installJob -Force -ErrorAction SilentlyContinue
+                        if ($installState -ne 'Completed') {
+                            $installDetail = @($installOutput; $installReason) | Where-Object { $_ }
+                            throw "Installing '$($AdPreparationModule.Name)' on '$env:COMPUTERNAME' failed: $(($installDetail | Out-String).Trim())"
                         }
+
                         Import-Module `
                             -Name $AdPreparationModule.Name `
                             -RequiredVersion $AdPreparationModule.Version

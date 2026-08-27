@@ -95,6 +95,14 @@ Do not reintroduce these. Each one cost real time to find.
 4. **Variables are case-insensitive.** A loop variable `$worker` collides with a parameter
    `[ValidateSet(...)][string]$Worker` and assignment then fails validation. Do not shadow a
    validated parameter with a differently-cased local.
+
+   The same trap applies to *any* assignment into a parameter carrying a `Validate*`
+   attribute, because the attribute is enforced on every later assignment at script scope.
+   `Deploy.ps1` assigned an unresolved service principal id straight into a GUID-patterned
+   parameter, so the explanatory `throw` underneath it was unreachable. Resolve into a local,
+   check it, then assign. Assignment inside a *function* creates an unguarded local and is
+   safe. `tests/Architecture.Tests.ps1` does not catch this; an AST scan for assignments to
+   guarded parameters does.
 5. **Run `bcdboot` from the host, not the applied image.** Launching
    `<mount>:\Windows\System32\bcdboot.exe` resolves side-by-side dependencies against the live
    system root and terminates with `0xC0E90002` before writing any output.

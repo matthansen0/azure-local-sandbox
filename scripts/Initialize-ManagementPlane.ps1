@@ -940,89 +940,56 @@ exit /b 0
                     }
 
                     if (-not $ouExists -or -not $lcmUser) {
-                        # The gallery install runs in a background job on purpose. If PowerShellGet
-                        # raises its NuGet bootstrap prompt there is no interactive host to answer it,
-                        # so the job parks in Blocked instead of stalling this session forever, and
-                        # Wait-Job reports that immediately. .NET 4.x also defaults to SSL3/TLS1.0,
-                        # which PSGallery rejects.
-                        $installJob = Start-Job `
-                            -ArgumentList $AdPreparationModule.Name, $AdPreparationModule.Version `
-                            -ScriptBlock {
-                                param(
-                                    [string]$ModuleName,
-                                    [string]$ModuleVersion
-                                )
+                        $installedModule = Get-Module `
+                            -ListAvailable `
+                            -Name $AdPreparationModule.Name |
+                            Where-Object Version -eq ([version]$AdPreparationModule.Version) |
+                            Select-Object -First 1
+                        if (-not $installedModule) {
+                            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+                            $packageDirectory = Join-Path $env:TEMP ([guid]::NewGuid().ToString('N'))
+                            $packagePath = Join-Path $packageDirectory "$($AdPreparationModule.Name).nupkg"
+                            $zipPath = Join-Path $packageDirectory "$($AdPreparationModule.Name).zip"
+                            $extractPath = Join-Path $packageDirectory 'extracted'
+                            $modulePath = Join-Path `
+                                ([Environment]::GetFolderPath('MyDocuments')) `
+                                "WindowsPowerShell\Modules\$($AdPreparationModule.Name)\$($AdPreparationModule.Version)"
 
-                                $ErrorActionPreference = 'Stop'
-                                $ProgressPreference = 'SilentlyContinue'
-                                [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-
-                                $installedProvider = @(
-                                    Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue |
-                                        Where-Object { $_.Version -ge [version]'2.8.5.208' }
-                                )
-                                if ($installedProvider.Count -eq 0) {
-                                    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.208 -Force -ForceBootstrap | Out-Null
-                                    $installedProvider = @(
-                                        Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue |
-                                            Where-Object { $_.Version -ge [version]'2.8.5.208' }
-                                    )
-                                    if ($installedProvider.Count -eq 0) {
-                                        throw 'The NuGet package provider is still missing after a forced bootstrap.'
-                                    }
+                            New-Item -Path $packageDirectory -ItemType Directory -Force | Out-Null
+                            try {
+                                Invoke-WebRequest `
+                                    -Uri $AdPreparationModule.PackageUri `
+                                    -OutFile $packagePath `
+                                    -UseBasicParsing
+                                $packageHash = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash
+                                if ($packageHash -ne $AdPreparationModule.Sha256) {
+                                    throw "SHA-256 mismatch for '$($AdPreparationModule.Name)' package. Expected $($AdPreparationModule.Sha256); received $packageHash."
                                 }
 
-                                $originalPolicy = (Get-PSRepository -Name PSGallery).InstallationPolicy
-                                try {
-                                    if ($originalPolicy -ne 'Trusted') {
-                                        Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-                                    }
-                                    Install-Module `
-                                        -Name $ModuleName `
-                                        -RequiredVersion $ModuleVersion `
-                                        -Repository PSGallery `
-                                        -Scope CurrentUser `
-                                        -Force
-                                }
-                                finally {
-                                    if ($originalPolicy -ne 'Trusted') {
-                                        Set-PSRepository -Name PSGallery -InstallationPolicy $originalPolicy
-                                    }
-                                }
+                                Copy-Item -LiteralPath $packagePath -Destination $zipPath
+                                Expand-Archive -LiteralPath $zipPath -DestinationPath $extractPath -Force
+                                New-Item -Path $modulePath -ItemType Directory -Force | Out-Null
+                                Copy-Item `
+                                    -Path (Join-Path $extractPath "$($AdPreparationModule.Name).psd1"), (Join-Path $extractPath "$($AdPreparationModule.Name).psm1") `
+                                    -Destination $modulePath `
+                                    -Force
                             }
-
-                        # Wait-Job raises a terminating deadlock error the moment a job blocks on input,
-                        # so its own errors are collected rather than allowed to escape as-is.
-                        $installTimeoutSeconds = 900
-                        $completed = Wait-Job `
-                            -Job $installJob `
-                            -Timeout $installTimeoutSeconds `
-                            -ErrorAction SilentlyContinue
-
-                        $installState = $installJob.State
-                        $installOutput = Receive-Job -Job $installJob -ErrorAction SilentlyContinue
-                        # A job that ends on a terminating error exposes it only through the child job's
-                        # JobStateInfo; Receive-Job and the Error collection both come back empty.
-                        $installReason = $installJob.ChildJobs | ForEach-Object {
-                            @($_.JobStateInfo.Reason; $_.Error | ForEach-Object { $_.ToString() })
-                        }
-                        Stop-Job -Job $installJob -ErrorAction SilentlyContinue
-                        Remove-Job -Job $installJob -Force -ErrorAction SilentlyContinue
-
-                        if ($installState -eq 'Blocked') {
-                            throw "Installing '$($AdPreparationModule.Name)' on '$env:COMPUTERNAME' stopped for an interactive prompt, which usually means the NuGet provider bootstrap failed. Check outbound HTTPS to the PowerShell Gallery from that guest."
-                        }
-                        if (-not $completed) {
-                            throw "Installing '$($AdPreparationModule.Name)' on '$env:COMPUTERNAME' did not finish within $installTimeoutSeconds seconds."
-                        }
-                        if ($installState -ne 'Completed') {
-                            $installDetail = @($installOutput; $installReason) | Where-Object { $_ }
-                            throw "Installing '$($AdPreparationModule.Name)' on '$env:COMPUTERNAME' failed: $(($installDetail | Out-String).Trim())"
+                            finally {
+                                Remove-Item -LiteralPath $packageDirectory -Recurse -Force -ErrorAction SilentlyContinue
+                            }
                         }
 
-                        Import-Module `
-                            -Name $AdPreparationModule.Name `
-                            -RequiredVersion $AdPreparationModule.Version
+                        try {
+                            Import-Module `
+                                -Name $AdPreparationModule.Name `
+                                -RequiredVersion $AdPreparationModule.Version `
+                                -Force `
+                                -ErrorAction Stop
+                        }
+                        catch {
+                            throw "Importing '$($AdPreparationModule.Name)' version '$($AdPreparationModule.Version)' on '$env:COMPUTERNAME' failed: $($_.Exception.Message)"
+                        }
+
                         New-HciAdObjectsPreCreation `
                             -AzureStackLCMUserCredential $LcmCredential `
                             -AsHciOUName $ouDistinguishedName

@@ -175,7 +175,7 @@ Describe 'Credential and artifact contract' {
         # success stream and silently corrupt a captured array.
         $isoConverter | Should -Match 'ListImagesJsonPath'
         $guidedSetup | Should -Not -Match '@\(&\s*\$converterPath'
-        $guidedSetup | Should -Match 'ConvertFrom-Json'
+        $guidedSetup | Should -Match 'ConvertFrom-Json\s*\|\s*ForEach-Object\s*\{\s*\$_\s*\}'
     }
 
     It 'pins reviewed external dependencies' {
@@ -187,6 +187,17 @@ Describe 'Credential and artifact contract' {
             $module.Name | Should -Not -BeNullOrEmpty
             $module.Version | Should -Not -BeNullOrEmpty
         }
+    }
+
+    It 'stages the AD preparation module without interactive PowerShellGet prompts' {
+        $managementScript = Get-Content (Join-Path $repoRoot 'scripts/Initialize-ManagementPlane.ps1') -Raw
+        $adPreparationModule = $dependencies.PowerShellModules.AsHciADArtifactsPreCreationTool
+
+        $adPreparationModule.PackageUri | Should -Match '^https://www\.powershellgallery\.com/api/v2/package/'
+        $adPreparationModule.Sha256 | Should -Match '^[A-F0-9]{64}$'
+        $managementScript | Should -Match 'Get-FileHash'
+        $managementScript | Should -Match 'Expand-Archive'
+        $managementScript | Should -Not -Match 'Install-Module'
     }
 
     It 'stages immutable source through published GitHub artifacts' {

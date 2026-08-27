@@ -12,7 +12,12 @@
         AzAccounts                       = @{ Name = 'Az.Accounts'; Version = '5.5.1' }
         AzConnectedMachine               = @{ Name = 'Az.ConnectedMachine'; Version = '1.1.1' }
         AzResources                      = @{ Name = 'Az.Resources'; Version = '10.0.1' }
-        AsHciADArtifactsPreCreationTool  = @{ Name = 'AsHciADArtifactsPreCreationTool'; Version = '10.2402' }
+        AsHciADArtifactsPreCreationTool  = @{
+            Name       = 'AsHciADArtifactsPreCreationTool'
+            Version    = '10.2402'
+            PackageUri = 'https://www.powershellgallery.com/api/v2/package/AsHciADArtifactsPreCreationTool/10.2402'
+            Sha256     = '70E34F131EE0D4708DFC608B9FEE5CE2D212B0E4746B83FD741E644A809753AC'
+        }
         Pester                           = @{ Name = 'Pester'; Version = '6.0.1' }
         PSScriptAnalyzer                 = @{ Name = 'PSScriptAnalyzer'; Version = '1.25.0' }
     }

@@ -257,7 +257,7 @@ if (-not $reuseImages) {
         if (-not (Test-Path -LiteralPath $listImagesJsonPath)) {
             throw "The image list was not found at '$listImagesJsonPath'."
         }
-        $availableImages = @(Get-Content -LiteralPath $listImagesJsonPath -Raw | ConvertFrom-Json)
+        $availableImages = @(Get-Content -LiteralPath $listImagesJsonPath -Raw | ConvertFrom-Json | ForEach-Object { $_ })
 
         if ($WindowsServerImageIndex -eq 0) {
             Write-Information 'Windows Server 2025 requires the index whose name ends in "(Desktop Experience)". A Server Core index will be rejected during conversion.' -InformationAction Continue

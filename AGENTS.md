@@ -122,20 +122,16 @@ does not share. Pass absolute paths when handing a script to another process.
 
 Do not reintroduce these. Each one cost real time to find.
 
-1. **PSGallery needs TLS 1.2.** .NET 4.x defaults to SSL3/TLS1.0 under Windows PowerShell
-   5.1, so the NuGet provider bootstrap fails silently on a clean Server 2025 host. Every
-   `Install-NuGetProvider` helper sets TLS 1.2 first, then re-checks that the provider is
-   really installed and throws if it is not.
-2. **Never let PowerShellGet prompt inside a guest.** If the NuGet provider is missing,
-   `Install-Module` raises an interactive prompt. Nothing can answer it over PowerShell
-   Direct and the run deadlocks indefinitely; this cost 96 minutes of silent hang. Gallery
-   installs inside a guest therefore run in a **background job**. A job that prompts does not
-   fail: it parks in the `Blocked` state, and `Wait-Job` then raises
-   `BlockedJobsDeadlockWithWaitJob` immediately instead of waiting out the timeout. Handle
-   `Blocked` explicitly, because it is the signal that the provider bootstrap failed.
-   A job that ends on a terminating error exposes it **only** through
-   `$job.ChildJobs[].JobStateInfo.Reason`; `Receive-Job` and `$job.ChildJobs[].Error` both
-   come back empty, which is how an earlier version produced a bare "failed:" with no detail.
+1. **Do not use PowerShellGet inside a guest.** Windows PowerShell 5.1 can prompt while
+  bootstrapping NuGet or installing a module. Nothing can answer that prompt over nested
+  PowerShell Direct: the job parks in `Blocked`, `Wait-Job` raises
+  `BlockedJobsDeadlockWithWaitJob`, and `Receive-Job` replays the prompt and blocks again.
+  The AD preparation module has no dependencies, so its exact Gallery package URI and SHA-256
+  are pinned in `config/dependencies.psd1`; `Initialize-ManagementPlane.ps1` downloads it with
+  TLS 1.2, verifies the digest, and extracts it directly into the CurrentUser module path.
+2. **Windows PowerShell 5.1 does not enumerate a top-level JSON array.** Wrapping
+  `ConvertFrom-Json` in `@(...)` produces one element whose value is the entire `Object[]`.
+  Pipe through `ForEach-Object { $_ }` before collecting when callers need individual records.
 3. **`?` is a legal character in a PowerShell variable name.** `"$name?api-version=..."`
    parses as `$name?api`. Use `"${name}?api-version=..."`.
 4. **Variables are case-insensitive.** A loop variable `$worker` collides with a parameter

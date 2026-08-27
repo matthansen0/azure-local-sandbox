@@ -83,8 +83,13 @@ Do not reintroduce these. Each one cost real time to find.
 2. **Never let PowerShellGet prompt inside a guest.** If the NuGet provider is missing,
    `Install-Module` raises an interactive prompt. Nothing can answer it over PowerShell
    Direct and the run deadlocks indefinitely; this cost 96 minutes of silent hang. Gallery
-   installs inside a guest run in a **background job** with `Wait-Job -Timeout`, because a job
-   has no interactive host, so a prompt fails fast instead of blocking.
+   installs inside a guest therefore run in a **background job**. A job that prompts does not
+   fail: it parks in the `Blocked` state, and `Wait-Job` then raises
+   `BlockedJobsDeadlockWithWaitJob` immediately instead of waiting out the timeout. Handle
+   `Blocked` explicitly, because it is the signal that the provider bootstrap failed.
+   A job that ends on a terminating error exposes it **only** through
+   `$job.ChildJobs[].JobStateInfo.Reason`; `Receive-Job` and `$job.ChildJobs[].Error` both
+   come back empty, which is how an earlier version produced a bare "failed:" with no detail.
 3. **`?` is a legal character in a PowerShell variable name.** `"$name?api-version=..."`
    parses as `$name?api`. Use `"${name}?api-version=..."`.
 4. **Variables are case-insensitive.** A loop variable `$worker` collides with a parameter
@@ -107,6 +112,12 @@ Do not reintroduce these. Each one cost real time to find.
 
    `Test-SandboxDeployment.ps1` therefore tries the local credential then the domain
    credential. `Get-AzureLocalDeploymentStatus.ps1` has always qualified with `.\`.
+
+   Qualifying the credential has a sharp edge. `Deploy-AzureLocal.ps1` sends
+   `localAdminUserName = $LocalCredential.UserName` to Azure as a deployment parameter, so it
+   must **not** be normalised there. Guards of the form
+   `if ($LocalAdministratorCredential.UserName -ne 'Administrator')` also have to strip the
+   `.\` prefix before comparing, or they reject the credential they were just handed.
 8. **`Get-AzResource` cannot resolve `Microsoft.AzureStackHCI/clusters` by
    `-ResourceType` plus `-Name`.** It returns nothing and a healthy cluster reads as
    `NotFound`. Look the cluster up by full `-ResourceId`.

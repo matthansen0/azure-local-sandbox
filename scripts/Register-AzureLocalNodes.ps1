@@ -140,7 +140,8 @@ function Get-ConnectedMachine {
         -ErrorAction SilentlyContinue
 }
 
-if ($LocalAdministratorCredential.UserName -ne 'Administrator') {
+# The credential is qualified as .\Administrator above, so the guard compares the account name.
+if (($LocalAdministratorCredential.UserName -replace '^\.\\', '') -ne 'Administrator') {
     throw "LocalAdministratorCredential must use the built-in 'Administrator' account."
 }
 if ($LocalAdministratorCredential.Password.Length -lt 14) {

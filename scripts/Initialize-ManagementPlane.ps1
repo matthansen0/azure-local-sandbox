@@ -940,10 +940,11 @@ exit /b 0
                     }
 
                     if (-not $ouExists -or -not $lcmUser) {
-                        # The gallery install runs in a background job on purpose. A job has no
-                        # interactive host, so the PowerShellGet NuGet bootstrap prompt fails instead of
-                        # blocking forever behind PowerShell Direct, and the wait bounds a stalled
-                        # download. .NET 4.x also defaults to SSL3/TLS1.0, which PSGallery rejects.
+                        # The gallery install runs in a background job on purpose. If PowerShellGet
+                        # raises its NuGet bootstrap prompt there is no interactive host to answer it,
+                        # so the job parks in Blocked instead of stalling this session forever, and
+                        # Wait-Job reports that immediately. .NET 4.x also defaults to SSL3/TLS1.0,
+                        # which PSGallery rejects.
                         $installJob = Start-Job `
                             -ArgumentList $AdPreparationModule.Name, $AdPreparationModule.Version `
                             -ScriptBlock {
@@ -990,17 +991,30 @@ exit /b 0
                                 }
                             }
 
+                        # Wait-Job raises a terminating deadlock error the moment a job blocks on input,
+                        # so its own errors are collected rather than allowed to escape as-is.
                         $installTimeoutSeconds = 900
-                        if (-not (Wait-Job -Job $installJob -Timeout $installTimeoutSeconds)) {
-                            Stop-Job -Job $installJob -ErrorAction SilentlyContinue
-                            Remove-Job -Job $installJob -Force -ErrorAction SilentlyContinue
+                        $completed = Wait-Job `
+                            -Job $installJob `
+                            -Timeout $installTimeoutSeconds `
+                            -ErrorAction SilentlyContinue
+
+                        $installState = $installJob.State
+                        $installOutput = Receive-Job -Job $installJob -ErrorAction SilentlyContinue
+                        # A job that ends on a terminating error exposes it only through the child job's
+                        # JobStateInfo; Receive-Job and the Error collection both come back empty.
+                        $installReason = $installJob.ChildJobs | ForEach-Object {
+                            @($_.JobStateInfo.Reason; $_.Error | ForEach-Object { $_.ToString() })
+                        }
+                        Stop-Job -Job $installJob -ErrorAction SilentlyContinue
+                        Remove-Job -Job $installJob -Force -ErrorAction SilentlyContinue
+
+                        if ($installState -eq 'Blocked') {
+                            throw "Installing '$($AdPreparationModule.Name)' on '$env:COMPUTERNAME' stopped for an interactive prompt, which usually means the NuGet provider bootstrap failed. Check outbound HTTPS to the PowerShell Gallery from that guest."
+                        }
+                        if (-not $completed) {
                             throw "Installing '$($AdPreparationModule.Name)' on '$env:COMPUTERNAME' did not finish within $installTimeoutSeconds seconds."
                         }
-
-                        $installOutput = Receive-Job -Job $installJob -ErrorAction SilentlyContinue
-                        $installState = $installJob.State
-                        $installReason = $installJob.ChildJobs | ForEach-Object { $_.Error | ForEach-Object { $_.ToString() } }
-                        Remove-Job -Job $installJob -Force -ErrorAction SilentlyContinue
                         if ($installState -ne 'Completed') {
                             $installDetail = @($installOutput; $installReason) | Where-Object { $_ }
                             throw "Installing '$($AdPreparationModule.Name)' on '$env:COMPUTERNAME' failed: $(($installDetail | Out-String).Trim())"

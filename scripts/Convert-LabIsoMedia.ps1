@@ -232,7 +232,12 @@ function Convert-InstallImageToVhdx {
             -NewFileSystemLabel 'Windows' `
             -Confirm:$false | Out-Null
 
-        $dismLogPath = Join-Path $env:TEMP "dism-apply-$([IO.Path]::GetFileNameWithoutExtension($DestinationPath)).log"
+        # DISM logs sit with the other run logs so they outlive the session that produced them.
+        $dismLogDirectory = 'C:\AzureLocalSandbox\Logs'
+        if (-not (Test-Path -LiteralPath $dismLogDirectory)) {
+            $dismLogDirectory = $env:TEMP
+        }
+        $dismLogPath = Join-Path $dismLogDirectory "dism-apply-$([IO.Path]::GetFileNameWithoutExtension($DestinationPath)).log"
         Write-Step "Applying image index $ImageIndex ('$($selectedImage[0].ImageName)') with DISM. Expect 10-30 minutes; progress is reported every 5 minutes and logged to $dismLogPath."
 
         # Redirection is deliberately avoided: capturing DISM's progress output hides it and can block

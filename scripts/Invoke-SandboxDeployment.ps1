@@ -61,6 +61,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $stateRoot = 'C:\AzureLocalSandbox\State'
+$logRoot = 'C:\AzureLocalSandbox\Logs'
 $localCredential = $LocalAdministratorCredential
 $domainCredential = $DomainAdministratorCredential
 $deploymentCredential = $LcmCredential
@@ -132,11 +133,12 @@ function Invoke-Stage {
         [Parameter(Mandatory)][scriptblock]$Action
     )
 
-    Write-Information "[$(Get-Date -Format o)] Starting stage: $Name" -InformationAction Continue
+    # 6>&1 because a Windows PowerShell 5.1 transcript does not record the information stream.
+    Write-Information "[$(Get-Date -Format o)] Starting stage: $Name" -InformationAction Continue 6>&1
     $stopwatch = [Diagnostics.Stopwatch]::StartNew()
-    & $Action
+    & $Action 6>&1
     $stopwatch.Stop()
-    Write-Information "[$(Get-Date -Format o)] Completed stage: $Name in $($stopwatch.Elapsed.ToString('hh\:mm\:ss'))" -InformationAction Continue
+    Write-Information "[$(Get-Date -Format o)] Completed stage: $Name in $($stopwatch.Elapsed.ToString('hh\:mm\:ss'))" -InformationAction Continue 6>&1
 }
 
 if ($localCredential.Password.Length -lt 14) {
@@ -151,32 +153,47 @@ if ($deploymentCredential.Password.Length -lt 14) {
 
 New-Item -Path $stateRoot -ItemType Directory -Force | Out-Null
 
-& (Join-Path $PSScriptRoot 'Test-HostReadiness.ps1')
-
-if (-not $SkipAzurePreflight) {
-    & (Join-Path $PSScriptRoot 'Test-DeploymentPreflight.ps1') `
-        -ConfigurationPath $labConfigurationPath `
-        -PurgeSoftDeletedKeyVault:$PurgeSoftDeletedKeyVault
+# A run lasts hours and the console that started it is often gone by the time anyone looks, so the
+# whole thing is transcribed to disk, starting before the gates so a failed check is captured too.
+New-Item -Path $logRoot -ItemType Directory -Force | Out-Null
+$transcriptPath = Join-Path $logRoot "sandbox-deployment-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
+$transcriptStarted = $false
+try {
+    Start-Transcript -Path $transcriptPath | Out-Null
+    $transcriptStarted = $true
+    Write-Information "Logging this run to $transcriptPath" -InformationAction Continue 6>&1
+}
+catch {
+    Write-Warning "Could not start a transcript, continuing without one: $($_.Exception.Message)"
 }
 
-if ($PreflightOnly) {
-    Write-Information 'Preflight only: every check passed and no stage was started.' -InformationAction Continue
-    return
-}
+try {
+    & (Join-Path $PSScriptRoot 'Test-HostReadiness.ps1') 6>&1
 
-# A resumed run that still has downstream state but has lost its parent images would silently rebuild
-# them and then fail later against differencing disks that no longer have a parent.
-$imagesVerified = Test-ImageState -StatePath (Join-Path $stateRoot 'images.json')
-if (-not $imagesVerified -and (Test-Path -LiteralPath (Join-Path $stateRoot 'nested-vms.json'))) {
-    throw 'Nested VM state exists but the verified parent images are missing or no longer match their recorded hashes. Restore V:\VHDs or remove the nested VMs and their state before resuming.'
-}
+    if (-not $SkipAzurePreflight) {
+        & (Join-Path $PSScriptRoot 'Test-DeploymentPreflight.ps1') `
+            -ConfigurationPath $labConfigurationPath `
+            -PurgeSoftDeletedKeyVault:$PurgeSoftDeletedKeyVault 6>&1
+    }
 
-if ('Images' -in $forcedStages -and (Test-Path -LiteralPath (Join-Path $stateRoot 'nested-vms.json'))) {
-    throw 'Parent images cannot be replaced after differencing disks exist. Remove the nested VMs and their state before forcing Images.'
-}
-if ('GuestDisks' -in $forcedStages -and (Test-Path -LiteralPath (Join-Path $stateRoot 'level-one-guests.json'))) {
-    throw 'Guest disks cannot be re-specialized after first boot. Rebuild the nested VMs instead of forcing GuestDisks.'
-}
+    if ($PreflightOnly) {
+        Write-Information 'Preflight only: every check passed and no stage was started.' -InformationAction Continue 6>&1
+        return
+    }
+
+    # A resumed run that still has downstream state but has lost its parent images would silently rebuild
+    # them and then fail later against differencing disks that no longer have a parent.
+    $imagesVerified = Test-ImageState -StatePath (Join-Path $stateRoot 'images.json')
+    if (-not $imagesVerified -and (Test-Path -LiteralPath (Join-Path $stateRoot 'nested-vms.json'))) {
+        throw 'Nested VM state exists but the verified parent images are missing or no longer match their recorded hashes. Restore V:\VHDs or remove the nested VMs and their state before resuming.'
+    }
+
+    if ('Images' -in $forcedStages -and (Test-Path -LiteralPath (Join-Path $stateRoot 'nested-vms.json'))) {
+        throw 'Parent images cannot be replaced after differencing disks exist. Remove the nested VMs and their state before forcing Images.'
+    }
+    if ('GuestDisks' -in $forcedStages -and (Test-Path -LiteralPath (Join-Path $stateRoot 'level-one-guests.json'))) {
+        throw 'Guest disks cannot be re-specialized after first boot. Rebuild the nested VMs instead of forcing GuestDisks.'
+    }
 
     $imageStatePath = Join-Path $stateRoot 'images.json'
     if (-not (Test-ImageState -StatePath $imageStatePath)) {
@@ -324,9 +341,44 @@ if ('GuestDisks' -in $forcedStages -and (Test-Path -LiteralPath (Join-Path $stat
             -RequireAzureLocalDeployment:$Deploy
     }
 
-[ordered]@{
-    phase     = if ($Deploy) { 'Complete' } else { 'Validated' }
-    updatedAt = (Get-Date).ToUniversalTime().ToString('o')
-} | ConvertTo-Json | Set-Content `
-    -LiteralPath (Join-Path $stateRoot 'orchestration.json') `
-    -Encoding UTF8
+    [ordered]@{
+        phase     = if ($Deploy) { 'Complete' } else { 'Validated' }
+        updatedAt = (Get-Date).ToUniversalTime().ToString('o')
+    } | ConvertTo-Json | Set-Content `
+        -LiteralPath (Join-Path $stateRoot 'orchestration.json') `
+        -Encoding UTF8
+
+    Remove-Item -LiteralPath (Join-Path $stateRoot 'last-error.json') -Force -ErrorAction SilentlyContinue
+}
+catch {
+    # The terminating error is written by the host only after the transcript has stopped, so the
+    # reason for the failure is recorded here while the transcript is still running.
+    $failureRecord = [ordered]@{
+        failedAt         = (Get-Date).ToUniversalTime().ToString('o')
+        message          = $_.Exception.Message
+        exceptionType    = $_.Exception.GetType().FullName
+        position         = $_.InvocationInfo.PositionMessage
+        scriptStackTrace = $_.ScriptStackTrace
+        transcript       = $transcriptPath
+    }
+    try {
+        $failureRecord | ConvertTo-Json -Depth 4 | Set-Content `
+            -LiteralPath (Join-Path $stateRoot 'last-error.json') `
+            -Encoding UTF8
+    }
+    catch {
+        Write-Warning "Could not write last-error.json: $($_.Exception.Message)"
+    }
+
+    Write-Warning "Sandbox deployment failed: $($failureRecord.message)"
+    Write-Information $failureRecord.position -InformationAction Continue 6>&1
+    Write-Information "Script stack trace:$([Environment]::NewLine)$($failureRecord.scriptStackTrace)" -InformationAction Continue 6>&1
+    Write-Information "Failure details: $(Join-Path $stateRoot 'last-error.json')" -InformationAction Continue 6>&1
+    throw
+}
+finally {
+    if ($transcriptStarted) {
+        Write-Information "Run log: $transcriptPath" -InformationAction Continue 6>&1
+        Stop-Transcript | Out-Null
+    }
+}

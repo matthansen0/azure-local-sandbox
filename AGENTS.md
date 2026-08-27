@@ -72,6 +72,52 @@ by the Azure Local service and cannot be shortened.
 
 End to end from launching the wizard: **roughly 5 hours**, plus ISO download time.
 
+## Logging and diagnostics
+
+Start here when a run has failed and the console is gone.
+
+| Artefact | Path |
+|---|---|
+| Orchestrator transcript, one per run | `C:\AzureLocalSandbox\Logs\sandbox-deployment-<yyyyMMdd-HHmmss>.log` |
+| Structured failure record | `C:\AzureLocalSandbox\State\last-error.json` |
+| Host bootstrap transcript | `C:\AzureLocalSandbox\Logs\Bootstrap.log` |
+| DISM image apply | `C:\AzureLocalSandbox\Logs\dism-apply-*.log` |
+| Stage progress markers | `C:\AzureLocalSandbox\State\*.json` |
+| Azure Local LCM logs, on a node | `C:\CloudDeployment\Logs\CloudDeployment*.log` |
+
+`last-error.json` carries the message, exception type, the failing file and line, the script stack
+trace, and the transcript path. It is deleted on a successful run, so if it exists it describes the
+most recent failure.
+
+Two things to know before trusting a transcript:
+
+- **A Windows PowerShell 5.1 transcript does not record the information stream.** `Write-Information`
+  is invisible to it even with `-InformationAction Continue`, and so is `$InformationPreference`.
+  Since every `Write-Step` in this repository is a `Write-Information`, the orchestrator appends
+  `6>&1` to the stage action and to each sub-script call to merge that stream into output, which
+  *is* recorded. Keep that redirection on any new call, or the log silently loses its narration.
+- **A terminating error reaches the host only after `Stop-Transcript` has run.** The orchestrator
+  therefore catches, records the failure, and rethrows, so the reason lands in the log rather than
+  after the end of it.
+
+## Running the checks locally
+
+`bicep` is not on `PATH` on the sandbox host, so the full suite needs the pinned build:
+
+```powershell
+$exe = "$env:TEMP\bicep.exe"
+Invoke-WebRequest -UseBasicParsing `
+    -Uri 'https://github.com/Azure/bicep/releases/download/v0.45.15/bicep-win-x64.exe' `
+    -OutFile $exe
+./tests/Invoke-Tests.ps1 -BicepExecutable $exe
+```
+
+That is 56 tests. `-Offline -SkipBicep` drops to 47 and skips template compilation, so use the full
+form before pushing.
+
+`$env:TEMP` on this host resolves to a per-session `...\Temp\2`, which a child `powershell.exe`
+does not share. Pass absolute paths when handing a script to another process.
+
 ## Failure modes already fixed
 
 Do not reintroduce these. Each one cost real time to find.
@@ -147,6 +193,9 @@ Do not reintroduce these. Each one cost real time to find.
 - Do **not** paste a multi-line block whose first line is `Read-Host`. PowerShell feeds the
   *second line* to the prompt as the password. Prompt first, then paste the rest, or use
   `Get-Credential`.
+- An agent is not permitted to run a password prompt on the operator's behalf, so the operator
+  has to type it. `Get-Credential | Export-Clixml` is the least error-prone route because it
+  works from any terminal and survives a session being cleaned up.
 
 ## Cost and containment
 

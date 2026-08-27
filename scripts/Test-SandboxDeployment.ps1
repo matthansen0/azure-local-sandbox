@@ -35,23 +35,23 @@ function Get-MachineLocalCredential {
 
 $LocalAdministratorCredential = Get-MachineLocalCredential -Credential $LocalAdministratorCredential
 
+# Cloud deployment applies the Azure Local security baseline, which disables the node's local
+# administrator account, so a deployed node only answers to the domain credential. A node that is
+# merely validated only has the local one.
+$nodeCredentials = @($LocalAdministratorCredential)
+if ($DomainAdministratorCredential) {
+    $nodeCredentials += $DomainAdministratorCredential
+}
+
 function Invoke-NodeCommand {
-    # Cloud deployment applies the Azure Local security baseline, which disables the node's local
-    # administrator account, so a deployed node only answers to the domain credential. A node that
-    # is merely validated still only has the local one.
     param(
         [Parameter(Mandatory)][string]$VMName,
         [Parameter(Mandatory)][scriptblock]$ScriptBlock,
         [object[]]$ArgumentList = @()
     )
 
-    $candidates = @($LocalAdministratorCredential)
-    if ($DomainAdministratorCredential) {
-        $candidates += $DomainAdministratorCredential
-    }
-
     $lastError = $null
-    foreach ($candidate in $candidates) {
+    foreach ($candidate in $nodeCredentials) {
         try {
             return Invoke-Command `
                 -VMName $VMName `

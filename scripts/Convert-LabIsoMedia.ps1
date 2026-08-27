@@ -3,11 +3,6 @@
 #Requires -Modules Dism, Hyper-V, Storage
 
 [CmdletBinding()]
-[Diagnostics.CodeAnalysis.SuppressMessageAttribute(
-    'PSUseUsingScopeModifierInNewRunspaces',
-    '',
-    Justification = 'The worker receives every value through Start-Job ArgumentList and keeps the script block self-contained for Windows PowerShell 5.1.'
-)]
 param(
     [Parameter(Mandatory)]
     [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]

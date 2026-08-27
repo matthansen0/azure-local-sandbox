@@ -503,9 +503,10 @@ Describe 'Host performance contract' {
     It 'converts ISO media one at a time in the calling process' {
         # A VHDX mounted from a Start-Job worker, or a second concurrent conversion, drops into
         # ERROR_VHD_INVALID_STATE about 30 seconds into the DISM apply.
-        $converterSource = Get-Content (Join-Path $repoRoot 'scripts/Convert-LabIsoMedia.ps1') -Raw
-        $converterSource | Should -Not -Match 'Start-Job'
-        $converterSource | Should -Match 'foreach \(\$request in \$conversionRequests\)'
-        $converterSource | Should -Match 'Convert-InstallImageToVhdx'
+        $converterSource = Get-Content (Join-Path $repoRoot 'scripts/Convert-LabIsoMedia.ps1')
+        $converterCode = ($converterSource | Where-Object { $_ -notmatch '^\s*#' }) -join [Environment]::NewLine
+        $converterCode | Should -Not -Match 'Start-Job'
+        $converterCode | Should -Match 'foreach \(\$request in \$conversionRequests\)'
+        $converterCode | Should -Match 'Convert-InstallImageToVhdx'
     }
 }

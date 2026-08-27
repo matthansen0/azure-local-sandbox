@@ -455,7 +455,9 @@ if ($Mode -eq 'Deploy') {
 
 if (-not $HciResourceProviderObjectId) {
     Write-Step 'Resolving the Azure Local resource provider service principal...'
-    $HciResourceProviderObjectId = Invoke-AzureCli `
+    # Resolved into a local first: the parameter is pattern-guarded, so assigning raw or empty CLI
+    # output to it throws a validation error instead of the explanation below.
+    $resolvedProviderObjectId = Invoke-AzureCli `
         -Arguments @(
             'ad', 'sp', 'list',
             '--filter', "appId eq '1412d89f-b8a8-4111-b4fd-e82905cbd85d'",
@@ -463,7 +465,12 @@ if (-not $HciResourceProviderObjectId) {
             '--only-show-errors',
             '--output', 'tsv'
         )
-    $HciResourceProviderObjectId = ($HciResourceProviderObjectId -join '').Trim()
+    $resolvedProviderObjectId = ($resolvedProviderObjectId -join '').Trim()
+    if (-not $resolvedProviderObjectId) {
+        throw "The Azure Local resource provider service principal was not found. Register Microsoft.AzureStackHCI first or pass -HciResourceProviderObjectId. Deploy mode registers providers automatically."
+    }
+
+    $HciResourceProviderObjectId = $resolvedProviderObjectId
 }
 if (-not $HciResourceProviderObjectId) {
     throw "The Azure Local resource provider service principal was not found. Register Microsoft.AzureStackHCI first or pass -HciResourceProviderObjectId. Deploy mode registers providers automatically."

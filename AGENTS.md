@@ -211,12 +211,36 @@ Do not reintroduce these. Each one cost real time to find.
 
 ## Still unproven
 
-The first successful run applied fixes while it was in flight, so no single clean pass has
-been observed end to end. Specifically:
+The first successful run applied fixes while it was in flight, so no single clean pass has been
+observed end to end. A second round of local QA on 2026-08-27 closed most of the gap without
+spending anything: the repository suite, the host readiness gate, the Azure preflight gate, and the
+full 35 check validation were all run against the live environment on the shipped code, and the
+pure functions were unit tested by extracting them from source. That QA found four more defects,
+two of them in the fixes themselves, including an Arc stage guard that would have failed every
+fresh run.
 
-- The background-job gallery install in `Initialize-ManagementPlane.ps1` re-ran only after the
-  NuGet provider had already been installed by hand on the domain controller, so the cold path
-  it was written for has not been exercised.
-- `Start-SandboxSetup.ps1` was never executed; the whole run was driven from the command line.
+What a fresh deployment still has to prove:
 
-A single clean rebuild into a fresh resource group is the only thing that would settle both.
+- `Register-AzureLocalNodes.ps1` end to end. Its guard is unit tested but the script has not
+  executed since it changed.
+- `Start-SandboxSetup.ps1`. Its parameter contract against the orchestrator is verified statically
+  and its helpers return values that satisfy their guarded targets, but the prompts and the image
+  index picker have never been driven.
+- The cold PSGallery bootstrap on a freshly promoted domain controller. The original failure was
+  environmental. The code can no longer hang; worst case it stops within fifteen minutes and names
+  the cause.
+
+Nothing else in the repository is known to be untested against a real run.
+
+## Handoff checklist
+
+If you are picking this up after a failure:
+
+1. Read `C:\AzureLocalSandbox\State\last-error.json` for the message, file, line, and stack trace.
+2. Open the transcript it points at for the full narration of the run.
+3. Compare `C:\AzureLocalSandbox\State\*.json` against [STAGE-CONTRACT.md](docs/STAGE-CONTRACT.md)
+   to see which stage to resume from. Completed stages are skipped automatically.
+4. Credentials are gone with the session. Ask the operator to run
+   `Get-Credential -UserName 'Administrator' | Export-Clixml 'C:\AzureLocalSandbox\State\lab.cred'`,
+   load it, and delete it when the run finishes.
+5. Re-run `scripts/Invoke-SandboxDeployment.ps1` with the same arguments. It resumes.

@@ -54,6 +54,8 @@ Premium SSD data disks):
 Deallocated cost is disk charges only (9× P30). Deallocate the VM when not in use
 and delete the resource group when the lab is no longer needed.
 
+End-to-End, the deployment takes ~6 hours due to the serialized nature of an Azure Local deployment.
+
 ## Quick Start
 
 Authenticate and select the subscription:

@@ -103,9 +103,8 @@ integration tests.
 
 ## Project Status
 
-The source and contract tests pass, but this repository has not yet completed a
-real paid deployment with licensed media. Results can still vary by subscription
-policy, quota, region, ISO build, and Azure service behavior.
+[![repologbook.com](https://repoanalyticsprod4rquhaw.z19.web.core.windows.net/badges/N-oTHIKR4bsdkuh0IUTsHA.svg)](https://repologbook.com/)
+
 
 ## License
 

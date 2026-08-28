@@ -9,8 +9,7 @@ management host for Active Directory, DNS, and routing.
 This project was inspired by [Arc Jumpstart](https://jumpstart.azure.com/) and
 specifically [Jumpstart LocalBox](https://jumpstart.azure.com/azure_jumpstart_localbox).
 Jumpstart remains available for use and exploration, but the program is now in
-maintenance mode. This repository is an independent implementation and does not import
-or execute Jumpstart code.
+maintenance mode.
 
 This project is intended for labs and demonstrations. Virtual Azure Local is not
 supported by Microsoft Support and the environment is not suitable for production

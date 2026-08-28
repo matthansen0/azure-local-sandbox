@@ -4,6 +4,14 @@ Deploy a two-node Azure Local learning environment inside one Azure VM. The oute
 Windows Server 2025 VM runs Hyper-V and hosts two Azure Local nodes plus a nested
 management host for Active Directory, DNS, and routing.
 
+## Project Origin
+
+This project was inspired by [Arc Jumpstart](https://jumpstart.azure.com/) and
+specifically [Jumpstart LocalBox](https://jumpstart.azure.com/azure_jumpstart_localbox).
+Jumpstart remains available for use and exploration, but the program is now in
+maintenance mode. This repository is an independent implementation and does not import
+or execute Jumpstart code.
+
 This project is intended for labs and demonstrations. Virtual Azure Local is not
 supported by Microsoft Support and the environment is not suitable for production
 workloads.
@@ -69,6 +77,21 @@ $env:AZURE_LOCAL_SANDBOX_ADMIN_PASSWORD = '<strong-password>'
 The deployment installs Hyper-V, creates storage and networking, stages the exact
 Git commit through temporary private Azure Storage, and reboots the VM once.
 
+### Preflight, Validate, and Deploy
+
+These are separate parts of the in-VM workflow:
+
+| Action | When it runs | What it does |
+| --- | --- | --- |
+| **Preflight** | Automatically at the start of every **Validate** or **Deploy** run | Performs fast prerequisite checks for host readiness, configuration, managed-identity access, Azure Local region support, resource-group access, and a conflicting soft-deleted key vault. It does not build the nested environment. |
+| **Validate** | Recommended for the first full in-VM run | Runs preflight, builds and configures the nested environment, registers the nodes with Arc, invokes Azure Local cloud validation, and runs live checks. It stops before Azure Local deployment. |
+| **Deploy** | After a successful **Validate** run | Reuses the validated environment and completes Azure Local cloud deployment. If selected on the first run, it automatically performs **Validate** before deployment. |
+
+**Validate** is therefore more than a prerequisite check. Running it separately creates
+a review point before the additional 2.5-to-3-hour Azure Local deployment. Command-line
+users can run only the prerequisite checks by passing `-PreflightOnly` to
+`Invoke-SandboxDeployment.ps1`; see the [deployment guide](docs/DEPLOYMENT.md#command-line-alternative).
+
 After deployment:
 
 1. Connect to `LocalBox-Client` through Azure Bastion.
@@ -84,22 +107,6 @@ images are reused when setup is launched again.
 
 See the [deployment guide](docs/DEPLOYMENT.md) for media requirements, regional
 options, command-line setup, and validation commands.
-
-## Validation
-
-Run the local repository checks before release or dependency updates:
-
-```powershell
-Set-PSRepository PSGallery -InstallationPolicy Trusted
-Install-Module Pester -RequiredVersion 6.0.1 -Scope CurrentUser -Force
-Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
-./tests/Invoke-Tests.ps1
-```
-
-These checks compile Bicep, run PSScriptAnalyzer, verify architecture and security
-contracts, and compare generated parameters with the pinned Microsoft Quickstart
-template. A real Azure `Validate` and `Deploy` remain the environment-specific
-integration tests.
 
 ## Project Status
 

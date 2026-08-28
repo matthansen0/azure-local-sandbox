@@ -40,8 +40,8 @@ Premium SSD data disks):
 
 | State | Cost |
 |---|---|
-| Running | ~$3.90/hour (~$94/day) |
-| Deallocated | ~$1.70/hour (~$41/day) |
+| Running | ~$3.90/hour |
+| Deallocated | ~$1.70/hour |
 
 Deallocated cost is disk charges only (9× P30). Deallocate the VM when not in use
 and delete the resource group when the lab is no longer needed.

@@ -425,6 +425,42 @@ Describe 'Management plane orchestration contract' {
         $managementPlaneSource | Should -Match "Restart-VM -Name 'Vm-Router' -Force"
         $managementPlaneSource | Should -Match 'Get-Command -Name Install-RemoteAccess'
     }
+
+    It 'repairs AD provider state before converging every incomplete AD preparation attempt' {
+        $managementPlanePath = Join-Path $repoRoot 'scripts/Initialize-ManagementPlane.ps1'
+        $managementPlaneAst = [System.Management.Automation.Language.Parser]::ParseFile(
+            $managementPlanePath,
+            [ref]$null,
+            [ref]$null
+        )
+        $providerRepairCommand = $managementPlaneAst.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.CommandAst] -and
+                $node.GetCommandName() -eq 'Wait-ActiveDirectoryProviderDrive'
+            }, $true)
+        $adPreparationCommand = $managementPlaneAst.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.CommandAst] -and
+                $node.GetCommandName() -eq 'New-HciAdObjectsPreCreation'
+            }, $true)
+
+        $providerRepairCommand | Should -Not -BeNullOrEmpty
+        $adPreparationCommand | Should -Not -BeNullOrEmpty
+        $providerRepairCommand.Extent.StartOffset |
+            Should -BeLessThan $adPreparationCommand.Extent.StartOffset
+
+        $conditionalAncestor = $null
+        $ancestor = $adPreparationCommand.Parent
+        while ($ancestor) {
+            if ($ancestor -is [System.Management.Automation.Language.IfStatementAst]) {
+                $conditionalAncestor = $ancestor
+                break
+            }
+            $ancestor = $ancestor.Parent
+        }
+        $conditionalAncestor |
+            Should -BeNullOrEmpty -Because 'a prior attempt can leave the OU and user without their required ACL'
+    }
 }
 Describe 'Fail-fast deployment contract' {
     BeforeAll {

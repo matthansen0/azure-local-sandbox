@@ -58,6 +58,26 @@ The orchestrator blocks unsafe image replacement after differencing disks exist 
 
 ## Common Problems
 
+### AD preparation fails because the AD drive does not exist
+
+On a freshly promoted domain controller, the Active Directory module can load before Netlogon has
+published the domain locator records. The import prints this warning:
+
+```text
+Error initializing default drive: Unable to find a default server with Active Directory Web Services running.
+```
+
+Later AD cmdlets can succeed without repairing the missing `AD:` provider drive. The HCI preparation
+module then creates the deployment OU and LCM user but fails when it uses `AD:` to grant the OU ACL.
+Those two objects do not mean preparation completed.
+
+Current source waits for the SOA and SRV records, reconstructs `AD:` through the local controller,
+verifies the domain path, and invokes the convergent preparation module on every incomplete
+ManagementPlane attempt. The failed attempt does not write `management-plane.json`, so update the
+staged source and rerun `Invoke-SandboxDeployment.ps1` with the same arguments and credentials. It
+will skip completed earlier stages and repair ManagementPlane; do not delete the nested VMs or force
+an image stage.
+
 ### Host readiness fails
 
 Confirm:

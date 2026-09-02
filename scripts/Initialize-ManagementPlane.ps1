@@ -851,11 +851,55 @@ exit /b 0
                     Import-Module ActiveDirectory
                     Import-Module DnsServer
 
+                    function Wait-ActiveDirectoryProviderDrive {
+                        param(
+                            [Parameter(Mandatory)]
+                            [string]$Server,
+
+                            [Parameter(Mandatory)]
+                            [string]$DomainDistinguishedName,
+
+                            [ValidateRange(1, 30)]
+                            [int]$TimeoutMinutes = 5
+                        )
+
+                        $providerDeadline = (Get-Date).AddMinutes($TimeoutMinutes)
+                        $lastProviderFailure = 'The AD: drive was not created.'
+                        while ($true) {
+                            try {
+                                $activeDirectoryDrive = Get-PSDrive -Name AD -ErrorAction SilentlyContinue
+                                if (-not $activeDirectoryDrive) {
+                                    $null = New-PSDrive `
+                                        -Name AD `
+                                        -PSProvider ActiveDirectory `
+                                        -Root '//RootDSE/' `
+                                        -Server $Server `
+                                        -Scope Global `
+                                        -ErrorAction Stop
+                                }
+
+                                $null = Get-Item `
+                                    -LiteralPath "AD:\$DomainDistinguishedName" `
+                                    -ErrorAction Stop
+                                return
+                            }
+                            catch {
+                                $lastProviderFailure = $_.Exception.Message
+                            }
+
+                            if ((Get-Date) -ge $providerDeadline) {
+                                throw "Active Directory provider drive 'AD:' on '$env:COMPUTERNAME' did not become accessible through '$Server' within $TimeoutMinutes minutes. Last error: $lastProviderFailure"
+                            }
+                            Start-Sleep -Seconds 10
+                        }
+                    }
+
                     # ADWS starts accepting directory queries a couple of minutes after it reports running.
                     $directoryDeadline = (Get-Date).AddMinutes(10)
+                    $directoryDomain = $null
                     while ($true) {
                         try {
-                            $null = Get-ADDomain -ErrorAction Stop
+                            $directoryDomain = Get-ADDomain -Server $env:COMPUTERNAME -ErrorAction Stop
                             break
                         }
                         catch {
@@ -899,6 +943,13 @@ exit /b 0
                         Start-Sleep -Seconds 15
                     }
 
+                    # Import-Module can attempt its default AD: drive before the new forest has
+                    # published locator records. A later successful AD cmdlet does not recreate
+                    # that missing drive, but the preparation module requires AD:\ for its ACL work.
+                    $null = Wait-ActiveDirectoryProviderDrive `
+                        -Server $env:COMPUTERNAME `
+                        -DomainDistinguishedName $directoryDomain.DistinguishedName
+
                     # A forest with no forwarders reports IPAddress as $null rather than an empty
                     # array, and piping $null runs the body once with $_ unset.
                     $forwarderConfiguration = Get-DnsServerForwarder -ErrorAction SilentlyContinue
@@ -922,78 +973,62 @@ exit /b 0
                     $domainDistinguishedName = ($Configuration.Domain.Fqdn.Split('.') | ForEach-Object { "DC=$_" }) -join ','
                     $ouDistinguishedName = "OU=$($Configuration.Domain.DeploymentOuName),$domainDistinguishedName"
 
-                    # -Identity raises a terminating error for a missing object, so -ErrorAction cannot suppress it.
-                    $ouExists = $null
-                    try {
-                        $ouExists = Get-ADOrganizationalUnit -Identity $ouDistinguishedName -ErrorAction Stop
-                    }
-                    catch [Microsoft.ActiveDirectory.Management.ADIdentityNotFoundException] {
-                        $ouExists = $null
-                    }
+                    # The module is convergent and must run on every incomplete ManagementPlane
+                    # attempt. A previous attempt can create the OU and user, then fail while
+                    # granting its ACL; checking only for those two objects would skip the repair.
+                    $installedModule = Get-Module `
+                        -ListAvailable `
+                        -Name $AdPreparationModule.Name |
+                        Where-Object Version -eq ([version]$AdPreparationModule.Version) |
+                        Select-Object -First 1
+                    if (-not $installedModule) {
+                        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+                        $packageDirectory = Join-Path $env:TEMP ([guid]::NewGuid().ToString('N'))
+                        $packagePath = Join-Path $packageDirectory "$($AdPreparationModule.Name).nupkg"
+                        $zipPath = Join-Path $packageDirectory "$($AdPreparationModule.Name).zip"
+                        $extractPath = Join-Path $packageDirectory 'extracted'
+                        $modulePath = Join-Path `
+                            ([Environment]::GetFolderPath('MyDocuments')) `
+                            "WindowsPowerShell\Modules\$($AdPreparationModule.Name)\$($AdPreparationModule.Version)"
 
-                    $lcmUser = $null
-                    try {
-                        $lcmUser = Get-ADUser -Identity $Configuration.Domain.DeploymentUserName -ErrorAction Stop
-                    }
-                    catch [Microsoft.ActiveDirectory.Management.ADIdentityNotFoundException] {
-                        $lcmUser = $null
-                    }
-
-                    if (-not $ouExists -or -not $lcmUser) {
-                        $installedModule = Get-Module `
-                            -ListAvailable `
-                            -Name $AdPreparationModule.Name |
-                            Where-Object Version -eq ([version]$AdPreparationModule.Version) |
-                            Select-Object -First 1
-                        if (-not $installedModule) {
-                            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-                            $packageDirectory = Join-Path $env:TEMP ([guid]::NewGuid().ToString('N'))
-                            $packagePath = Join-Path $packageDirectory "$($AdPreparationModule.Name).nupkg"
-                            $zipPath = Join-Path $packageDirectory "$($AdPreparationModule.Name).zip"
-                            $extractPath = Join-Path $packageDirectory 'extracted'
-                            $modulePath = Join-Path `
-                                ([Environment]::GetFolderPath('MyDocuments')) `
-                                "WindowsPowerShell\Modules\$($AdPreparationModule.Name)\$($AdPreparationModule.Version)"
-
-                            New-Item -Path $packageDirectory -ItemType Directory -Force | Out-Null
-                            try {
-                                Invoke-WebRequest `
-                                    -Uri $AdPreparationModule.PackageUri `
-                                    -OutFile $packagePath `
-                                    -UseBasicParsing
-                                $packageHash = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash
-                                if ($packageHash -ne $AdPreparationModule.Sha256) {
-                                    throw "SHA-256 mismatch for '$($AdPreparationModule.Name)' package. Expected $($AdPreparationModule.Sha256); received $packageHash."
-                                }
-
-                                Copy-Item -LiteralPath $packagePath -Destination $zipPath
-                                Expand-Archive -LiteralPath $zipPath -DestinationPath $extractPath -Force
-                                New-Item -Path $modulePath -ItemType Directory -Force | Out-Null
-                                Copy-Item `
-                                    -Path (Join-Path $extractPath "$($AdPreparationModule.Name).psd1"), (Join-Path $extractPath "$($AdPreparationModule.Name).psm1") `
-                                    -Destination $modulePath `
-                                    -Force
-                            }
-                            finally {
-                                Remove-Item -LiteralPath $packageDirectory -Recurse -Force -ErrorAction SilentlyContinue
-                            }
-                        }
-
+                        New-Item -Path $packageDirectory -ItemType Directory -Force | Out-Null
                         try {
-                            Import-Module `
-                                -Name $AdPreparationModule.Name `
-                                -RequiredVersion $AdPreparationModule.Version `
-                                -Force `
-                                -ErrorAction Stop
-                        }
-                        catch {
-                            throw "Importing '$($AdPreparationModule.Name)' version '$($AdPreparationModule.Version)' on '$env:COMPUTERNAME' failed: $($_.Exception.Message)"
-                        }
+                            Invoke-WebRequest `
+                                -Uri $AdPreparationModule.PackageUri `
+                                -OutFile $packagePath `
+                                -UseBasicParsing
+                            $packageHash = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash
+                            if ($packageHash -ne $AdPreparationModule.Sha256) {
+                                throw "SHA-256 mismatch for '$($AdPreparationModule.Name)' package. Expected $($AdPreparationModule.Sha256); received $packageHash."
+                            }
 
-                        New-HciAdObjectsPreCreation `
-                            -AzureStackLCMUserCredential $LcmCredential `
-                            -AsHciOUName $ouDistinguishedName
+                            Copy-Item -LiteralPath $packagePath -Destination $zipPath
+                            Expand-Archive -LiteralPath $zipPath -DestinationPath $extractPath -Force
+                            New-Item -Path $modulePath -ItemType Directory -Force | Out-Null
+                            Copy-Item `
+                                -Path (Join-Path $extractPath "$($AdPreparationModule.Name).psd1"), (Join-Path $extractPath "$($AdPreparationModule.Name).psm1") `
+                                -Destination $modulePath `
+                                -Force
+                        }
+                        finally {
+                            Remove-Item -LiteralPath $packageDirectory -Recurse -Force -ErrorAction SilentlyContinue
+                        }
                     }
+
+                    try {
+                        Import-Module `
+                            -Name $AdPreparationModule.Name `
+                            -RequiredVersion $AdPreparationModule.Version `
+                            -Force `
+                            -ErrorAction Stop
+                    }
+                    catch {
+                        throw "Importing '$($AdPreparationModule.Name)' version '$($AdPreparationModule.Version)' on '$env:COMPUTERNAME' failed: $($_.Exception.Message)"
+                    }
+
+                    New-HciAdObjectsPreCreation `
+                        -AzureStackLCMUserCredential $LcmCredential `
+                        -AsHciOUName $ouDistinguishedName
 
                     # Promotion leaves the NtpServer provider disabled, so the domain controller keeps
                     # good time but never answers client requests, and every node falls back to its

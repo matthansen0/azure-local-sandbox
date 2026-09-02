@@ -233,4 +233,88 @@ Describe 'Host script execution under Windows PowerShell' -Skip:([System.Environ
         (Invoke-FeatureInstallSimulation -FeatureRestartNeeded No -RemoteAccessAvailable $true).RestartNeeded |
             Should -Be 'No'
     }
+
+    It 'recreates a missing AD provider drive through the local domain controller' {
+        Set-StrictMode -Version Latest
+
+        $managementScript = Join-Path $repoRoot 'scripts\Initialize-ManagementPlane.ps1'
+        $managementAst = [System.Management.Automation.Language.Parser]::ParseFile(
+            $managementScript,
+            [ref]$null,
+            [ref]$null
+        )
+        $providerFunctionAst = $managementAst.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $node.Name -eq 'Wait-ActiveDirectoryProviderDrive'
+            }, $true)
+        $providerFunctionAst | Should -Not -BeNullOrEmpty
+        . ([scriptblock]::Create($providerFunctionAst.Extent.Text))
+
+        $simulationResult = & {
+            $state = [ordered]@{
+                DriveExists  = $false
+                NewDrive     = $null
+                RequestedPath = $null
+            }
+
+            function Get-PSDrive {
+                [CmdletBinding()]
+                param([string]$Name)
+
+                if ($state.DriveExists) {
+                    return [pscustomobject]@{ Name = $Name }
+                }
+            }
+
+            function New-PSDrive {
+                [CmdletBinding()]
+                param(
+                    [string]$Name,
+                    [string]$PSProvider,
+                    [string]$Root,
+                    [string]$Server,
+                    [string]$Scope
+                )
+
+                $state.NewDrive = [pscustomobject]@{
+                    Name       = $Name
+                    PSProvider = $PSProvider
+                    Root       = $Root
+                    Server     = $Server
+                    Scope      = $Scope
+                }
+                $state.DriveExists = $true
+                return [pscustomobject]@{ Name = $Name }
+            }
+
+            function Get-Item {
+                [CmdletBinding()]
+                param([string]$LiteralPath)
+
+                if (-not $state.DriveExists) {
+                    throw 'The simulated AD: drive does not exist.'
+                }
+                $state.RequestedPath = $LiteralPath
+                return [pscustomobject]@{ DistinguishedName = 'DC=jumpstart,DC=local' }
+            }
+
+            Wait-ActiveDirectoryProviderDrive `
+                -Server 'JumpstartDC' `
+                -DomainDistinguishedName 'DC=jumpstart,DC=local' `
+                -TimeoutMinutes 1
+
+            return [pscustomobject]@{
+                NewDrive      = $state.NewDrive
+                RequestedPath = $state.RequestedPath
+            }
+        }
+
+        $simulationResult.NewDrive.Name | Should -Be 'AD'
+        $simulationResult.NewDrive.PSProvider | Should -Be 'ActiveDirectory'
+        $simulationResult.NewDrive.Root | Should -Be '//RootDSE/'
+        $simulationResult.NewDrive.Server | Should -Be 'JumpstartDC'
+        $simulationResult.NewDrive.Scope | Should -Be 'Global'
+        $simulationResult.RequestedPath | Should -Be 'AD:\DC=jumpstart,DC=local'
+    }
 }

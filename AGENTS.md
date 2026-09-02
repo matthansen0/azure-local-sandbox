@@ -112,7 +112,7 @@ Invoke-WebRequest -UseBasicParsing `
 ./tests/Invoke-Tests.ps1 -BicepExecutable $exe
 ```
 
-That is 56 tests. `-Offline -SkipBicep` drops to 47 and skips template compilation, so use the full
+That is 59 tests. `-Offline -SkipBicep` drops to 50 and skips template compilation, so use the full
 form before pushing.
 
 `$env:TEMP` on this host resolves to a per-session `...\Temp\2`, which a child `powershell.exe`
@@ -175,6 +175,16 @@ Do not reintroduce these. Each one cost real time to find.
    (`vManagement(compute_management)`). `FABRIC` still exists but carries no IPv4 DNS, so
    `Get-DnsClientServerAddress -InterfaceAlias 'FABRIC'` raises a *terminating* CIM error
    rather than returning nothing. Scan all IPv4 adapters instead of naming one.
+10. **A successful AD cmdlet does not prove that the `AD:` drive exists.** On a freshly promoted
+  controller, `Import-Module ActiveDirectory` can run before the domain locator records are
+  published. It warns that no AD Web Services server was found and permanently skips its default
+  drive, even though `Get-ADDomain` succeeds moments later and DNS is subsequently repaired.
+  After verifying the domain SOA and SRV records, create `AD:` explicitly through the local DC
+  with a `//RootDSE/` root and verify the domain path before invoking the HCI preparation module.
+
+  The module can also create the OU and user and then fail while granting the ACL. Never use the
+  existence of only those two objects as the completion test: an incomplete ManagementPlane run
+  must invoke the convergent module again so it repairs the permissions and GPO inheritance.
 
 ## Credential handling
 
@@ -225,6 +235,9 @@ What a fresh deployment still has to prove:
 - The cold PSGallery bootstrap on a freshly promoted domain controller. The original failure was
   environmental. The code can no longer hang; worst case it stops within fifteen minutes and names
   the cause.
+- `Initialize-ManagementPlane.ps1` after a partial AD preparation failure. The missing-`AD:` repair
+  and unconditional convergence path are unit tested, but have not yet completed on a live freshly
+  promoted controller.
 
 Nothing else in the repository is known to be untested against a real run.
 
